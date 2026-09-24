@@ -88,6 +88,11 @@ const build = (displayName, slug, org) => {
 export const aaLink = (model, creator) =>
   build(model, normalizeSlug(model), CREATOR_TO_ORG.get(normKey(creator ?? '')) ?? null);
 
+/** TBench 行：tbLink(model, model_org)。TB 的 model 名不带前缀（如 'Fable 5.1'、'Opus 5'），
+ *  model_org 来自 fetch-tb 的 model_org 字段（'Anthropic'/'OpenAI'/'xAI'/'Google'/'Z.ai'…），
+ *  与 AA 的 Creator 列同义，直接复用 aaLink 的归一化/映射即可。 */
+export const tbLink = (model, model_org) => aaLink(model, model_org);
+
 /** DeepSWE 行：dsLink(model)，如 'gemini-3.8-flash' → google/gemini-3.8-flash */
 export const dsLink = (model) => {
   const s = model.toLowerCase();

@@ -94,13 +94,18 @@ const svgW = 920, svgH = 560;
 const padL = 70, padR = 30, padT = 50, padB = 60;
 
 // x: log 0.1 ~ 30
-const xMin = 0.1, xMax = 30;
+const niceCeil = (m) => { const s = 10 ** Math.floor(Math.log10(Math.max(m, 1e-9))); for (const i of [1, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (s * i >= m) return s * i; return s * 10; };
+const dataXs = rows.map((r) => +r.avg_cost || 0).filter((v) => v > 0);
+const xMin = Math.min(0.1, 10 ** Math.floor(Math.log10(Math.min(...dataXs))));
+const xMax = Math.max(30, niceCeil(Math.max(...dataXs)));
 const xScale = (v) => Math.log10(v / xMin) / Math.log10(xMax / xMin);
 const plotW = svgW - padL - padR;
 const X = (v) => padL + xScale(v) * plotW;
 
 // y: 30 ~ 80
-const yMin = 30, yMax = 80;
+const dataYs = rows.map((r) => +r.pass_rate || 0);
+const yMin = Math.min(30, Math.floor(Math.min(...dataYs) / 5) * 5);
+const yMax = Math.max(80, Math.ceil(Math.max(...dataYs) / 5) * 5);
 const yScale = (v) => (v - yMin) / (yMax - yMin);
 const plotH = svgH - padT - padB;
 const Y = (v) => padT + (1 - yScale(v)) * plotH;
@@ -112,7 +117,7 @@ const zoneX = X(ZONE_COST);
 const zoneY = Y(ZONE_PASS);
 
 const xTicks = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25];
-const yTicks = [40, 50, 60, 70];
+const yTicks = []; for (let t = 40; t <= yMax; t += 10) yTicks.push(t);
 
 let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" id="chart" style="font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;background:#ffffff">`;
 

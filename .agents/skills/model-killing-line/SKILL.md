@@ -1,13 +1,14 @@
 ---
 name: model-killing-line
-description: "Draws the 模型斩杀线 - dual Pareto-frontier scatters (DeepSWE PASS@1 vs Avg Cost + Artificial Analysis Intelligence Index vs Cost per Task) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, DeepSWE chart, AA chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://deepswe.datacurve.ai/ and https://artificialanalysis.ai/leaderboards/models."
+description: "Draws the 模型斩杀线 - Pareto-frontier scatters (DeepSWE PASS@1 vs Avg Cost + Artificial Analysis Intelligence Index vs Cost per Task + Terminal-Bench 4.0 Accuracy vs Cost per Task) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, DeepSWE chart, AA chart, TBench/Terminal-Bench chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://deepswe.datacurve.ai/, https://artificialanalysis.ai/leaderboards/models and https://www.tbench.ai/."
 ---
 
 # model-killing-line
 
-Zero-argument skill. Fetches the DeepSWE leaderboard and the Artificial
-Analysis model leaderboard, computes each Pareto frontier, and emits a
-single-page `index.html` with two switchable sections (tab 切换，默认通用智力，
+Zero-argument skill. Fetches the DeepSWE leaderboard, the Artificial
+Analysis model leaderboard, and (可选) the TBench / Terminal-Bench 4.0
+leaderboard, computes each Pareto frontier, and emits a
+single-page `index.html` with switchable sections (tab 切换，默认通用智力，
 解读常驻) — chart + table per board 由脚本生成，解读由 LLM 每次实时撰写（脚本不写解读文案）,
 
 - ① 通用智力斩杀线（数据源 Artificial Analysis）: X = Cost per Task USD (log axis),
@@ -15,6 +16,21 @@ single-page `index.html` with two switchable sections (tab 切换，默认通用
   (表格只收 Index > 20 且 Cost 有效的行).
 - ② 长程编码能力斩杀线（数据源 DeepSWE）: X = Avg Cost per task (log axis), Y = PASS@1,
   efficient zone = PASS@1 ≥ 50% & cost ≤ $2.5.
+- ③ 终端智能斩杀线（数据源 TBench, Terminal-Bench 4.0 官方榜, 可选）: X = Cost per Task USD
+  (log axis, total_cost_usd ÷ n_trials —— 页面 COST 列是整次 run 总成本，没有平均成本列；
+  为使 X 轴与 DeepSWE 的 Avg Cost per task / AA 的 Cost per Task 跨榜可比，用折算的任务单价，
+  表格里则按页面口径原样展示总成本), Y = Accuracy %, efficient zone = Accuracy ≥ 40 &
+  cost ≤ $10。每行 = (模型 × agent × reasoning_effort) 的官方 run，27 行；带 tb-data.json +
+  tb-chart.svg 时 gen-html 自动启用第三个 tab；缺这两个文件则保持双榜页面不报错。
+  表格按用户要求展示**全部 effort 变体（27 行）**：按 accuracy 降序 + competition 排名（同分同号
+  跳号，如 57.88% 四行并列 2/2/2/2 后跳到 6；tbench.ai 页面默认每模型只留最佳变体，
+  即模型级 rank 1..15 含 13/13/15）、COST 统一为每任务平均花费（总成本 ÷ n_trials，与斩杀线
+  X 轴同口径；总成本按页面的 k 缩写格式仍在 tooltip 里，$3267→$3.3k）、Accuracy 带 ±CI、
+  含 Released（实为评测日期）列。**斩杀线前沿与表格同用全变体口径**：同模型同榜的多个
+  effort 档全部参与 Pareto（如 GPT-6 Astra 的 low→max 整条性价比线占住前沿），
+  表格的 alive/⚡ 标记与之三态一致（故 GLM-5.3 这类模型级 rank 5 也可能因被
+  Astra low/high 更便宜更强地压制而不在斩杀线上）。
+  效率维用 Run 平均 token 流速 total_tokens ÷ (avg_trial_duration_sec × n_trials)。
 - 解读只有一块: 由 LLM 每次实时根据最新数据自由撰写，脚本不生成解读文案，只提供数据。
 
 Frontier models render as logo circles with callout labels, everyone else
@@ -30,11 +46,13 @@ is auto-opened in the system default browser via `open.mjs`.
 ```bash
 node .pi/skills/model-killing-line/scripts/fetch.mjs              # → $TMPDIR/model-killing-line/data.json (~21 rows, DeepSWE)
 node .pi/skills/model-killing-line/scripts/fetch-aa.mjs           # → $TMPDIR/model-killing-line/aa-data.json (~79 rows, AA)
+node .pi/skills/model-killing-line/scripts/fetch-tb.mjs            # → $TMPDIR/model-killing-line/tb-data.json (27 rows, Terminal-Bench 4.0) — 可选
 node .pi/skills/model-killing-line/scripts/fetch-openrouter.mjs   # → $TMPDIR/model-killing-line/or-data.json (Top 30 from OpenRouter Top Weekly, text modality) — 可选
 node .pi/skills/model-killing-line/scripts/find-top-missing.mjs   # → $TMPDIR/model-killing-line/top-missing.json (OR Top 20 里没上双榜的模型) — 可选
 node .pi/skills/model-killing-line/scripts/render.mjs             # → $TMPDIR/model-killing-line/chart.svg (logos inlined as data URIs)
 node .pi/skills/model-killing-line/scripts/render-aa.mjs          # → $TMPDIR/model-killing-line/aa-chart.svg
-node .pi/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
+node .pi/skills/model-killing-line/scripts/render-tb.mjs          # → $TMPDIR/model-killing-line/tb-chart.svg — 可选（和 fetch-tb 成对）
+node .pi/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；存在 tb-data.json + tb-chart.svg 时自动加「终端智能」tab；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
 # LLM 看完本轮数据后自由撰写解读 HTML 片段，存文件后注入：
 node .pi/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing] --obs /tmp/mkl-obs.html  # --obs <html文件|->（- 从 stdin 读；MKL_OBS 传路径亦可）
 node .pi/skills/model-killing-line/scripts/open.mjs               # auto-open index.html in default browser
@@ -78,9 +96,29 @@ see below. The scripts read/write via cwd and need only node stdlib.
   latency, total). Keeps only Intelligence Index > 20 with non-empty cost.
   No JSON API exists for the Cost column — SSR HTML is the only source.
 - `render-aa.mjs`: same structure as `render.mjs` but for AA data
-  (log x 0.01~10, y 20~55, zone Index > 35 & < $1, `data-creator` /
-  `data-index` attributes, same-base-name single label + collision-aware callouts,
-  efficient 高效点描蓝圈同上）。
+  (log x 基础域 0.01~10、y 基础域 20~55——**数据超界时自适应扩展**：三图的 (min,max)
+  改为 `基础域 ∩ (数据 min/max 扩到 5 的整数倍)`，避免新模型（如 Claude Opus 5.5
+  IntelligenceIndex=58 > 55）被画到边框外，y 刻度随之生成到新上限；
+  zone Index > 35 & < $1, `data-creator` / `data-index` 属性,
+  same-base-name single label + collision-aware callouts, efficient 高效点描蓝圈同上）。
+- `fetch-tb.mjs`: GETs https://www.tbench.ai/ (Terminal-Bench 4.0 官方榜) 首页 SSR
+  HTML，解析内联的 Next.js RSC flight payload（`{"leaderboard":{...},"rows":[...]}`，
+  无公开 JSON API；RSC 以哨兵引号结束且尾括号不属于 JSON，解析正则见文件头）。
+  每行 = `{rank, model, agent, effort, accuracy, accuracy_ci, accuracy_disp(页面 "58.2% ± 2.8%"),
+  cost(每任务 = total_cost_usd÷n_trials), total_cost_usd, cost_disp(每任务平均花费, 表格 Cost 列),
+  cost_total_disp(总成本, 页面 k 缩写 "$3.3k", tooltip 用), display_total_tokens, date(页面 Released),
+  avg_trial_duration_sec, pass_at_2/5, speed(run 平均 tok/s, 缺失 null),
+  model_url/agent_url, model_org/agent_org}`。
+  Throws when zero rows parse（页面改版时重新检查 RSC payload 结构）。
+- `render-tb.mjs`: same structure as `render.mjs`/`render-aa.mjs` but for TBench data
+  (log x 0.5~50, y 0~70, zone Accuracy ≥ 40 & cost ≤ $10, `data-agent`/`data-effort`/
+  `data-acc`/`data-tokens`/`data-p2`/`data-p5` attributes + run 平均 tok/s 效率维)。
+  效率维用自身 speed（不跨榜融合），3D 差集 + 次级 2D 前沿 → 高效蓝圈同 AA。
+  前沿判定用全变体口径（所有 effort 档参与）。callout 用 AA 同款策略：同模型组
+  （多个 effort 档）在前沿上**只标一个气泡**，锚定 accuracy 最高的档（如 GPT-6 Astra (max)），
+  其余档只画圆点不弹气泡——避免 4 个 Astra 气泡挤在 y≈50-58 区互相避让后压住旁边点；
+  前后端统一用 uid = model+effort+agent 判定（图上/表格/tooltip 三态一致）。
+  logo 按 model_org 选（TB 模型名无品牌前缀，见 logos.mjs 的 ORG_LOGO_FILE）。
 
 - `fuse.mjs`: 跨榜归一化融合（纯字符串计算，无网络）。归一键 =
   `openrouter.mjs` 的 `normalizeSlug`（两榜同一模型 → 同一 key）。
@@ -104,9 +142,9 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
   effort 后缀 → 小写 hyphen slug，`aaLink(model, creator)` 按 Creator 列定 org，
   `dsLink(model)` 按前缀定 org；个例进 `SLUG_OVERRIDE`，OR 无详情页的进
   `SEARCH_ONLY` 回退搜索页）。新增模型先 curl 验 title 非软 404 再进映射。
-- `gen-html.mjs`: inlines both SVGs (`chart-deepswe` + `chart-aa`) +
-  both JSONs + shared `LOGO_MAP` into `index.html`: two independent
-  chart+table sections, one joint 解读卡片（见下「解读：LLM 实时撰写」——
+- `gen-html.mjs`: inlines the SVGs (`chart-deepswe` + `chart-aa`, 以及存在 tb-chart.svg
+  时第三个 `chart-tb`) + all JSONs + shared `LOGO_MAP` into `index.html`: two (带 TB 数据则
+  three) independent chart+table sections + tabs, one joint 解读卡片（见下「解读：LLM 实时撰写」——
   脚本只在卡片里留 `<div id="llm-obs">` 空位 + 把数据以 JSON 形式内联进页面供
   LLM 读取，不生成任何解读文案，不硬编码模型名）。页头有小字生成日期
   （构建时写入）+ JS 过期判断：打开时间距生成日期超过 15 天则显示数据过期提示。Tooltips
@@ -176,9 +214,38 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
 - 唯一要求：基于本轮实际数据现看现写，不得复用上一轮的解读内容；
   开头第一条固定为 📌 太长不看，用非常精简的一句话按成本优先 / 效率优先 / 能力优先各给一个选择；之后条数句式自由发挥。
 
+### 解读撰写原则（Agent 必读的视角提示词）
+
+每次撰写解读前必须把以下三条原则作为强制上下文阅读，不能跳过：
+
+1. **以 AA Intelligence Index 为主**。三榜数据时效不一致：AA Intelligence Index
+   每日更新，是最有信号价值的源；DeepSWE（长程编码）和 TBench 4.0（终端智能）
+   重评测成本高，更新都不勤。撰写推荐的视角应该以 AA 数据为锚，DS / TB 只作为
+   "已实测档"的补充佐证，不能本末倒置用 DS/TB 的"缺测"来否定 AA 上的高 Index
+   候选。
+2. **缺测 ≠ 短板**。DS / TB 暂未实测的"新一代"模型（即页面里挂 `📊 仅 AA 实测`
+   徽标的 `unbench-succ` 行）应理解为 "按 AA 实测 + 代际推测的候选"，而不是
+   "不推荐" / "待更新" / "缺测 = 短板"。新一代模型通常强于上一代，所以这些候选
+   应该被放进选型池而不是排除。解读里必须明确点出"对应的上一代"
+   （如 GPT-6 Luna → GPT-5.6 Luna、Claude Opus 5.5 → Claude Opus 5、
+   MiMo-V2.6-Pro → DeepSeek V4 Pro），并给出推测涨幅（如"DS 推测 ≥ 67%"）。
+3. **避免暗示短板的措辞**。禁用 "暂缺" / "待更新" / "短板" / "缺测 = 不推荐"
+   等暗示模型不行的措辞；改用 "未实测（按代际推测 ≥ 前代 X）"。📌 太长不看
+   一行也要按这个视角写：被推荐的应该是"AA Index X + 推测 ≥ 上一代 DS/TB 数据"
+   的组合，而不是"DS/TB 缺测所以搁置"。
+4. **OR Top Weekly 流量信号独立成段**。OpenRouter Top Weekly 的周用量是 production
+   data 的代理信号 — 流量大但 DS/AA/TB 都未实测的模型（如 DeepSeek V4.1 Flash
+   18.8T/wk、Hy4 preview 13.9T/wk、GLM 5.3 Flash 19.3T/wk）是"benchmark 滞后于
+   生产采用"的典型案例，解读里要单独成段提及（与"仅 AA 实测"段区分开）。
+
+不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
+缺测"说成"不推荐"；用 DS/TB 的缺测率来评价 AA 上的高 Index 模型。
+
 ## Thresholds (edit in render.mjs, never ask the user)
 
-- `ZONE_COST` / `ZONE_PASS` (`2.5` / `50`): efficient-zone rectangle.
+- `ZONE_COST` / `ZONE_PASS` (`2.5` / `50`): DeepSWE efficient-zone rectangle.
+- render-tb.mjs: `ZONE_COST` / `ZONE_ACC` (`10` / `40`), `xMin`/`xMax` (`0.5`/`50`),
+  `yMin`/`yMax` (`0`/`70`): TBench efficient-zone rectangle + axis ranges.
 - `xMin` / `xMax` (`0.1` / `30`), `yMin` / `yMax` (`30` / `80`): axis ranges.
 - `LOGO_RING` (`#487265`): uniform green ring around all logo badges
   (frontier + dots + tooltip); effort colors are no longer used for rings.
@@ -190,6 +257,8 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
   changed shape — inspect before continuing.
 - `fetch-aa.mjs` prints `trs: ~305, kept: ~79`. `kept` drifting means the
   table markup or filter yield changed — inspect before continuing.
+- `fetch-tb.mjs` prints `rows: 27`（Terminal-Bench 4.0）。任何其它数目说明
+  leaderboard 形状变了 — 重新检查 RSC payload 解析。
 - `render.mjs` prints frontier points; the count matches Pareto-optimal rows.
 - Hovering any dot in `index.html` shows a card with that dot's lab logo,
   model name, PASS@1, and cost.

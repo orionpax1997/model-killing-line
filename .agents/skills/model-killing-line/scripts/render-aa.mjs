@@ -91,14 +91,18 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 const svgW = 920, svgH = 560;
 const padL = 70, padR = 30, padT = 50, padB = 60;
 
-// x: log 0.01 ~ 10
+// x: log 基础域 0.01 ~ 10（数据全在域内时保持，不改刻度）
 const xMin = 0.01, xMax = 10;
 const xScale = (v) => Math.log10(v / xMin) / Math.log10(xMax / xMin);
 const plotW = svgW - padL - padR;
 const X = (v) => padL + xScale(Math.max(v, xMin)) * plotW;
 
-// y: 20 ~ 55
-const yMin = 20, yMax = 55;
+// y: 基础域 20 ~ 55；数据超界时向下/向上扩展到 5 的整数倍
+//（Claude Opus 5.5 max 的 IntelligenceIndex=58 曾 >55 被画到边框外，见 issue）
+const niceCeil5 = (m) => Math.ceil(Math.max(m, 55) / 5) * 5;
+const dataYs = rows.map((r) => +r.index || 0);
+const yMin = Math.min(20, Math.floor(Math.min(...dataYs) / 5) * 5);
+const yMax = niceCeil5(Math.max(...dataYs));
 const yScale = (v) => (v - yMin) / (yMax - yMin);
 const plotH = svgH - padT - padB;
 const Y = (v) => padT + (1 - yScale(v)) * plotH;
@@ -110,7 +114,7 @@ const zoneX = X(ZONE_COST);
 const zoneY = Y(ZONE_INDEX);
 
 const xTicks = [0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
-const yTicks = [25, 30, 35, 40, 45, 50];
+const yTicks = []; for (let t = 25; t <= yMax; t += 5) yTicks.push(t);
 
 let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" id="chart" style="font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;background:#ffffff">`;
 

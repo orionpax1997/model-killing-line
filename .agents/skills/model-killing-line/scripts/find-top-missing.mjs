@@ -16,10 +16,10 @@
 //     但在日志里报告，便于人工看是不是漏写了 strip 规则）。
 //
 // 用法: node scripts/find-top-missing.mjs [--top N] [--out <path>]
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeSlug, dsLink, aaLink } from './openrouter.mjs';
+import { normalizeSlug, dsLink, aaLink, tbLink } from './openrouter.mjs';
 
 const DIR = process.env.MKL_DIR ?? path.join(os.tmpdir(), 'model-killing-line');
 mkdirSync(DIR, { recursive: true });
@@ -36,6 +36,10 @@ const OUT = (() => {
 const orRows = JSON.parse(readFileSync(path.join(DIR, 'or-data.json'), 'utf8'));
 const dsRows = JSON.parse(readFileSync(path.join(DIR, 'data.json'), 'utf8'));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
+// TBench 3.0 独立成榜，可选：缺失时跳过 TB 维度（仅输出 DS/AA successors/free）。
+const tbRows = existsSync(path.join(DIR, 'tb-data.json'))
+  ? JSON.parse(readFileSync(path.join(DIR, 'tb-data.json'), 'utf8'))
+  : [];
 
 // AA 高性价比 / 高效 集合（复用 render-aa.mjs 的 2D+3D 前沿逻辑）。
 // 计算结果示例：frontNames = ['GPT-5.6 Luna (max)', 'GLM-5.3-Flash', 'GPT-6 Astra (xhigh)', ...]
@@ -120,6 +124,14 @@ const dsFind = (slug) => {
   return null;
 };
 const aaFind = (slug) => aaByCanon.get(slug) ?? null;
+// TBench 同理：按 canon key 查表，返回首个匹配 row（可能有多个 effort/agent 变体）。
+const tbByCanon = new Map();
+for (const r of tbRows) {
+  const k = normalizeSlug(r.model);
+  if (!tbByCanon.has(k)) tbByCanon.set(k, r);
+}
+const tbHas = (slug) => tbByCanon.has(slug);
+const tbFind = (slug) => tbByCanon.get(slug) ?? null;
 
 // strip 启发式：从一个 OR slug 派生一组"可能的上一代"候选 slug（按优先级）。
 const TRAILING_TOKENS = [
@@ -162,14 +174,18 @@ const anscestorCandidates = (slug) => {
 };
 
 const findPredecessor = (slug, onlyBoard) => {
-  // onlyBoard 限定只在某 board 上找 predecessor（避免 DS/AA 互相干扰）。
-  // 不传则按 DS 优先、AA 次之的原顺序。
+  // onlyBoard 限定只在某 board 上找 predecessor（避免 DS/AA/TB 互相干扰）。
+  // 不传则按 DS 优先、AA 次之、TB 末尾的原顺序。
   for (const cand of anscestorCandidates(slug)) {
     if (cand === slug) continue;
-    if (onlyBoard !== 'aa' && dsHas(cand)) return { board: 'ds', key: cand };
-    if (onlyBoard !== 'ds') {
+    if (onlyBoard !== 'aa' && onlyBoard !== 'tb' && dsHas(cand)) return { board: 'ds', key: cand };
+    if (onlyBoard !== 'ds' && onlyBoard !== 'tb') {
       const aa = aaFind(cand);
       if (aa) return { board: 'aa', key: aa.model };
+    }
+    if (onlyBoard !== 'ds' && onlyBoard !== 'aa') {
+      const tb = tbFind(cand);
+      if (tb) return { board: 'tb', key: tb.model };
     }
   }
   return null;
@@ -188,18 +204,28 @@ const successors = [];
 const free = [];
 const skipped = [];
 const seen = new Set();
-const seenDsCanons = new Set(); // 同一 canon 模型的 OR-driven DS successor 只留一条（去变体）
+// 同一 canon 模型的 OR-driven successor 只留一条（去变体）；按 board 分桶避免跨榜冲突。
+const seenBoardCanons = { ds: new Set(), aa: new Set(), tb: new Set() };
+const markDedup = (board, canon) => {
+  if (seenBoardCanons[board].has(canon)) return false;
+  seenBoardCanons[board].add(canon);
+  return true;
+};
 for (const r of orRows.slice(0, topArg)) {
   const k = r.slug; // OR 自己的规范 slug（详情页路径），多个 short_name 别名指向同一 slug = 同一模型
   if (seen.has(k)) continue;
   seen.add(k);
   const dsDirect = dsHas(k);
   const aaDirect = !!aaFind(k);
-  if (dsDirect && aaDirect) continue; // 双榜都已 benchmark
+  const tbDirect = tbHas(k);
+  if (dsDirect && aaDirect && tbDirect) continue; // 三榜都已 benchmark
   let pred = null;
-  if (dsDirect && !aaDirect) pred = findPredecessor(k, 'aa'); // AA 落后
+  if (dsDirect && aaDirect && !tbDirect) pred = findPredecessor(k, 'tb'); // TB 落后
+  else if (dsDirect && !aaDirect) pred = findPredecessor(k, 'aa'); // AA 落后
   else if (aaDirect && !dsDirect) pred = findPredecessor(k, 'ds'); // DS 落后
-  else pred = findPredecessor(k); // 双榜都没直接命中
+  else if (tbDirect && !dsDirect) pred = findPredecessor(k, 'ds'); // DS 落后
+  else if (tbDirect && !aaDirect) pred = findPredecessor(k, 'aa'); // AA 落后
+  else pred = findPredecessor(k); // 多榜都没直接命中
   const entry = {
     rank: r.rank,
     name: r.name,
@@ -214,13 +240,8 @@ for (const r of orRows.slice(0, topArg)) {
     is_free: r.is_free,
   };
   if (pred) {
-    // 同一 canon 模型的 OR-driven DS successor 只留第一条（去变体，
-    // 如 DeepSeek V4.1 Flash 已进，DeepSeek V4.1 Flash (max) 不再重复）。
-    if (pred.board === 'ds') {
-      const c = normalizeSlug(r.short_name);
-      if (seenDsCanons.has(c)) continue;
-      seenDsCanons.add(c);
-    }
+    // 同一 canon 模型的 OR-driven successor 只留第一条（去变体）。
+    if (!markDedup(pred.board, normalizeSlug(r.short_name))) continue;
     successors.push({ ...entry, predecessor: pred });
   } else if (r.is_free) {
     free.push(entry);
@@ -229,26 +250,24 @@ for (const r of orRows.slice(0, topArg)) {
   }
 }
 
-// AA highlight missing from DS (regardless of OR presence):
+// AA highlight missing from DS or TB (regardless of OR presence):
 // Reuse `successors` structure but with via='aa-highlight-no-or' so gen-html can
 // render the AA display name directly (not the OR short_name).
-// These rows show up under the DS table since the gap is DS-side.
 // Use the AA row's own creator → OR org mapping (aaLink) to get a real detail URL.
-const aaHm = [];
-// OR-driven DS successor 已经报过的 canon（上面 observedDsCanons），
-// 这里跳过同 canon 的 AA-highlight 条目（例：`DeepSeek V4.1 Flash (max)`
-// 与 OR-driven `DeepSeek V4.1 Flash` 同属 deepseek-v4.1-flash → 只留 OR 那条，
-// 含 OR Top #5 / 8.3T 数据）。
-for (const a of aaHighlightedMissingOnDs) {
-  if (seenDsCanons.has(a.canon)) continue;
+const hlHm = []; // { board: 'ds'|'tb', entry, ... }
+// 对每个 AA-highlight AA canon，产出三个 board 中缺失者：每 canon + 每 board 只留一条
+// （OR-driven successor 优先，这里是补齐 OR 独立的）。
+// OR-driven successor 已报过的 canon+board 这里跳过（例：`DeepSeek V4.1 Flash (max)`
+// 与 OR-driven `DeepSeek V4.1 Flash` 同属 deepseek-v4.1-flash → DS 只留 OR 那条）。
+const buildHlEntry = (a, board) => {
   const orMatch = orRows.find((r) => normalizeSlug(r.short_name) === a.canon);
   const aaRow = aaRows.find((r) => normalizeSlug(r.model) === a.canon && (a.fast ? r.model === a.model : true));
   const link = aaLink(a.model, aaRow?.creator);
   const providerOrg = (link.url.match(/^https:\/\/openrouter\.ai\/([^/]+)\//) || [])[1] || 'unknown';
-  // 锚点：canon 经 strip 启发式找 DS 上一代（如 claude-fable-5.1 → claude-fable-5）。
+  // 锚点：canon 经 strip 启发式找上一代（如 claude-fable-5.1 → claude-fable-5）。
   // 找不到才用 canon 本身（gen-html 会插表底并在 title 注明）。
-  const anchor = findPredecessor(a.canon, 'ds');
-  aaHm.push({
+  const anchor = findPredecessor(a.canon, board);
+  return {
     rank: orMatch?.rank ?? null,
     name: a.model,
     short_name: a.model,
@@ -260,13 +279,23 @@ for (const a of aaHighlightedMissingOnDs) {
     output_price: orMatch?.output_price ?? aaRow?.cost ?? null,
     context_length: orMatch?.context_length ?? null,
     is_free: orMatch?.is_free ?? false,
-    // AA 原始指标，供子行显示 Intelligence Index / Tokens/s（不再写价格/周用量）
     aa_index: aaRow?.index ?? null,
     aa_speed: aaRow?.speed ?? null,
-    predecessor: { board: 'ds', key: anchor ? anchor.key : a.canon, via: 'aa-highlight-no-or', kind: a.fast ? 'fast' : 'front' },
-  });
+    predecessor: { board, key: anchor ? anchor.key : a.canon, via: 'aa-highlight-no-or', kind: a.fast ? 'fast' : 'front' },
+  };
+};
+for (const board of ['ds', 'tb']) {
+  if (board === 'tb' && tbRows.length === 0) continue;
+  for (const a of aaHighlightedMissingOnDs) {
+    // AA highlight 中这条 AA canon 在该 board 是否缺失（已在 successor 中报过的也跳过）
+    if (board === 'ds' && dsCanonSet.has(a.canon)) continue;
+    if (board === 'tb' && tbHas(a.canon)) continue;
+    if (seenBoardCanons[board].has(a.canon)) continue;
+    seenBoardCanons[board].add(a.canon);
+    hlHm.push(buildHlEntry(a, board));
+  }
 }
-const allSuccessors = [...successors, ...aaHm];
+const allSuccessors = [...successors, ...hlHm];
 
 // Extra pass: AA high-cost-effective / high-efficiency but DS missing + OR is used.
 // Inserted as DS successor (yellow), anchored on the AA model name.
@@ -305,7 +334,9 @@ for (const r of orRows.slice(0, topArg)) {
   const k = r.slug;
   if (seenSucc.has(k)) continue;
   // DS already has this OR model under some alias (e.g. via dsLink override).
-  if (dsHas(k)) continue;
+  const dsDirect = dsHas(k);
+  const tbDirect = tbHas(k);
+  if (dsDirect && tbDirect) continue;
   const orCanon = normalizeSlug(r.short_name);
   // Direct hit (most common: OR short_name like `Claude Fable 5.1 (xhigh)`
   // normalizes to `claude-fable-5.1` which equals AA highlight canon).
@@ -317,28 +348,39 @@ for (const r of orRows.slice(0, topArg)) {
     const orEffortStripped = orCanonAfterEffortStrip(orCanon);
     aaHit = aaHighlightedCanon.has(orEffortStripped) ? orEffortStripped : null;
   }
-  if (aaHit) {
-    successors.push({
-      rank: r.rank,
-      name: r.name,
-      short_name: r.short_name,
-      provider: r.provider_display ?? r.provider,
-      slug: r.slug,
-      or_key: k,
-      weekly_tokens: r.weekly_tokens,
-      input_price: r.input_price,
-      output_price: r.output_price,
-      context_length: r.context_length,
-      is_free: r.is_free,
-      predecessor: { board: 'ds', key: aaHit, via: 'aa-highlight' },
-    });
-    console.log(`  🆕 (AA high) ${r.short_name} -> ds:missing  (precursor AA: ${aaHit})`);
+  const orEntry = {
+    rank: r.rank,
+    name: r.name,
+    short_name: r.short_name,
+    provider: r.provider_display ?? r.provider,
+    slug: r.slug,
+    or_key: k,
+    weekly_tokens: r.weekly_tokens,
+    input_price: r.input_price,
+    output_price: r.output_price,
+    context_length: r.context_length,
+    is_free: r.is_free,
+  };
+  // DS 落后但 TB 不缺 → 只补 DS
+  if (!dsDirect && aaHit) {
+    if (markDedup('ds', normalizeSlug(r.short_name))) {
+      successors.push({ ...orEntry, predecessor: { board: 'ds', key: aaHit, via: 'aa-highlight' } });
+      console.log(`  🆕 (AA high) ${r.short_name} -> ds:missing  (precursor AA: ${aaHit})`);
+    }
+  }
+  // TB 落后（不管 DS 是不是也有）：如果 TB 有 AA highlight canon 当锚点也补 TB。
+  // 注意 dsSlugAliases 跟 TB 没什么关系，这里直接复用 aaHit。
+  if (!tbDirect && aaHit) {
+    if (markDedup('tb', normalizeSlug(r.short_name))) {
+      successors.push({ ...orEntry, predecessor: { board: 'tb', key: aaHit, via: 'aa-highlight' } });
+      console.log(`  🆕 (AA high) ${r.short_name} -> tb:missing  (precursor AA: ${aaHit})`);
+    }
   }
 }
 
 writeFileSync(OUT, JSON.stringify({ successors: allSuccessors, free, skipped, top: topArg, or_count: orRows.length }, null, 1) + '\n');
 console.log(`or top${topArg}: ${orRows.slice(0, topArg).length} | successors: ${successors.length} | free: ${free.length} | skipped: ${skipped.length}  → ${OUT}`);
 for (const s of successors) console.log(`  🆕 ${s.short_name} → ${s.predecessor.board}:${s.predecessor.key}`);
-for (const s of aaHm) console.log(`  🆕 (AA highlight, DS 缺) ${s.short_name} → ds:missing  (AA ${s.predecessor.kind})`);
+for (const s of hlHm) console.log(`  🆕 (AA highlight, ${s.predecessor.board} 缺) ${s.short_name} → ${s.predecessor.board}:missing  (AA ${s.predecessor.kind})`);
 for (const f of free) console.log(`  🆓 ${f.short_name} (${(f.weekly_tokens / 1e12).toFixed(2)}T/wk)`);
 for (const s of skipped) console.log(`  ⚠️  skipped (no pred, not free): ${s.short_name}`);

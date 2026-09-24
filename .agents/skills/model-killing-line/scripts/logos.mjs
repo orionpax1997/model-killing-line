@@ -28,6 +28,20 @@ export const logoFileOf = (m) => {
   return null;
 };
 
+// TBench 榜的模型名不带品牌前缀（`Fable 5.1` / `Opus 5` / `GLM-5.3`…），
+// 但有 model_org 列——按 org 选 logo 更可靠；DS/AA 行没有 model_org，回退到上方前缀匹配。
+export const ORG_LOGO_FILE = Object.freeze({
+  'OpenAI': 'chatgptlogo.png',
+  'Anthropic': 'anthropic-1.svg',
+  'Google': 'gemini-sparkle.png',
+  'Z.ai': 'zai-org.svg',
+  'xAI': 'grokLogoTransparent.svg',
+});
+
+/** 榜单行 → logo 文件名：有 model_org 先用 org 映射，否则按模型名前缀匹配 */
+export const logoFileOfRow = (row) =>
+  (row.model_org && ORG_LOGO_FILE[row.model_org]) || logoFileOf(row.model);
+
 const MIME = { '.png': 'image/png', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
 
 const cache = new Map();

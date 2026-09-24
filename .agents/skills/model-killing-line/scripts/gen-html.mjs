@@ -18,8 +18,8 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { logoFileOf, logoUriOf } from './logos.mjs';
-import { aaLink, dsLink, normalizeSlug } from './openrouter.mjs';
+import { logoFileOf, logoFileOfRow, logoUriOf } from './logos.mjs';
+import { aaLink, dsLink, tbLink, normalizeSlug } from './openrouter.mjs';
 import { buildAaIndex, fusedEff, fusedSpeed, canonKey } from './fuse.mjs';
 
 const argv = (flag) => {
@@ -43,9 +43,13 @@ for (const f of ['data.json', 'chart.svg', 'aa-data.json', 'aa-chart.svg']) {
     process.exit(1);
   }
 }
+// TBench（Terminal-Bench 4.0）第三个榜为可选：tb-data.json + tb-chart.svg 都存在才启用终端智能 tab
+const HAS_TB = existsSync(path.join(DIR, 'tb-data.json')) && existsSync(path.join(DIR, 'tb-chart.svg'));
+if (!HAS_TB) console.log('TBench: tb-data.json/tb-chart.svg 未找到，跳过「终端智能」榜（跑 fetch-tb → render-tb 可启用）');
 
 const dsRows = JSON.parse(readFileSync(path.join(DIR, 'data.json'), 'utf8'));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
+
 rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
 
 // ---- 二维前沿：cost 升序，y 创新高即高性价比（决定图上连线/大圆） ----
@@ -54,26 +58,49 @@ rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
 //   不画线只做判断）—— 线上才算「高效」标蓝，线下（被另一个蓝色在
 //   能力+成本上全包围）降级为真被斩，不标蓝
 const numSpeed = (r) => { const v = parseFloat(r.speed); return Number.isNaN(v) ? -Infinity : v; };
-const pareto2 = (rows, costOf, yOf) => {
+const pareto2 = (rows, costOf, yOf, nameOf = (r) => r.model) => {
   const names = new Set();
   let best = -Infinity;
   for (const r of [...rows].sort((a, b) => costOf(a) - costOf(b))) {
-    if (yOf(r) > best) { best = yOf(r); names.add(r.model); }
+    if (yOf(r) > best) { best = yOf(r); names.add(nameOf(r)); }
   }
   return names;
 };
-const pareto3 = (rows, costOf, yOf, speedOf) => {
+const pareto3 = (rows, costOf, yOf, speedOf, nameOf = (r) => r.model) => {
   const names = new Set();
   for (const r of rows) {
     const dominated = rows.some((o) =>
       o !== r && costOf(o) <= costOf(r) && yOf(o) >= yOf(r) && speedOf(o) >= speedOf(r) &&
       (costOf(o) < costOf(r) || yOf(o) > yOf(r) || speedOf(o) > speedOf(r)));
-    if (!dominated) names.add(r.model);
+    if (!dominated) names.add(nameOf(r));
   }
   return names;
 };
 const dsFront = pareto2(dsRows, (r) => r.avg_cost, (r) => r.pass_rate);
 const aaFront = pareto2(aaRows, (r) => r.cost, (r) => r.index);
+// TBench 独立成榜（不与 DS/AA 归一化融合）：能力=Accuracy，成本=Cost/Task，效率=Run 平均 tok/s。
+// TB 同一模型在同榜有多个 effort 变体（各自独立成行），所以判定维度用 uid = model+effort+agent，
+// 不能像 DS/AA 那样只按 model —— 否则图上 5 个前沿点、表格只高亮 2 行，三态不一致。
+const tbUid = (r) => `${r.model}\u0000${r.effort ?? ''}\u0000${r.agent}`;
+const tbRows = HAS_TB ? JSON.parse(readFileSync(path.join(DIR, 'tb-data.json'), 'utf8')).map((r) => ({ ...r, k: tbUid(r) })) : [];
+
+// 表格展示全部 effort 变体（27 行）：按 accuracy 降序、competition ranking 同分同号跳号。
+// 注：tbench.ai 页面默认只列每模型最佳变体（模型级 rank 1..15，含 13/13/15），
+// 这里按用户要求给全变体视图；alive/⚡ 三态仍由全变体 werbose uid（r.k）判定。
+const tbBest = (() => {
+  const arr = [...tbRows].sort((x, y) => y.accuracy - x.accuracy); // 稳定排序保留同分之原始顺序
+  let prevAcc = null, prevRank = 0;
+  arr.forEach((r, i) => {
+    r.competition_rank = r.accuracy === prevAcc ? prevRank : i + 1;
+    prevAcc = r.accuracy;
+    prevRank = r.competition_rank;
+  });
+  return arr;
+})();
+const tbNumSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
+// 斩杀线用全变体口径（同 render-tb.mjs）：所有 effort 变体都参与 Pareto；
+// 页面表格是每模型最佳变体的模型级视图（tbBest），两者都保留
+const tbFront = pareto2(tbRows, (r) => r.cost, (r) => r.accuracy, (r) => r.k);
 // DS 效率维 = 复合效率 E = AA 融合 Tokens/s ÷ DS 自身 Steps（同名优先同 effort，无同名/无 steps → -Inf）——见 fuse.mjs
 const aaIndex = buildAaIndex(aaRows);
 const dsFused = new Map(dsRows.map((r) => [r.model, fusedSpeed(r, aaIndex)]));
@@ -81,19 +108,26 @@ const dsEffNum = (r) => fusedEff(r, aaIndex).num;
 console.log('fused speed: DS miss(AA无同名) =', dsRows.filter((r) => dsFused.get(r.model).kind === 'none').map((r) => r.model).join(', ') || '(none)');
 const dsFast3 = new Set([...pareto3(dsRows, (r) => r.avg_cost, (r) => r.pass_rate, dsEffNum)].filter((m) => !dsFront.has(m)));
 const aaFast3 = new Set([...pareto3(aaRows, (r) => r.cost, (r) => r.index, numSpeed)].filter((m) => !aaFront.has(m)));
-const pareto2On = (rows, names, costOf, yOf) => pareto2(rows.filter((r) => names.has(r.model)), costOf, yOf);
+const tbFast3 = new Set([...pareto3(tbRows, (r) => r.cost, (r) => r.accuracy, tbNumSpeed, (r) => r.k)].filter((m) => !tbFront.has(m)));
+const pareto2On = (rows, names, costOf, yOf, nameOf = (r) => r.model) => pareto2(rows.filter((r) => names.has(nameOf(r))), costOf, yOf, nameOf);
 const dsFast = pareto2On(dsRows, dsFast3, (r) => r.avg_cost, (r) => r.pass_rate);
 const aaFast = pareto2On(aaRows, aaFast3, (r) => r.cost, (r) => r.index);
+const tbFast = pareto2On(tbRows, tbFast3, (r) => r.cost, (r) => r.accuracy, (r) => r.k);
 const dsRest = dsRows.filter((r) => !dsFront.has(r.model));
 const aaRest = aaRows.filter((r) => !aaFront.has(r.model));
+const tbRest = tbRows.filter((r) => !tbFront.has(r.k));
 const dsCut = dsRest.filter((r) => !dsFast.has(r.model));
 const aaCut = aaRest.filter((r) => !aaFast.has(r.model));
+const tbCut = tbRest.filter((r) => !tbFast.has(r.model));
 const dsWorst = dsCut.reduce((a, b) => (b.avg_cost > a.avg_cost ? b : a));
 const aaWorst = aaCut.reduce((a, b) => (b.cost > a.cost ? b : a));
+const tbWorst = tbCut.reduce((a, b) => (b.cost > a.cost ? b : a), tbCut[0]);
 const dsZone = dsRows.filter((r) => r.pass_rate >= 50 && r.avg_cost <= 2.5);
 const aaZone = aaRows.filter((r) => r.index > 35 && r.cost < 1);
+const tbZone = tbRows.filter((r) => r.accuracy >= 40 && r.cost <= 10);
 const dsFrontList = [...dsRows].sort((a, b) => a.avg_cost - b.avg_cost).filter((r) => dsFront.has(r.model));
 const aaFrontList = [...aaRows].sort((a, b) => a.cost - b.cost).filter((r) => aaFront.has(r.model));
+const tbFrontList = [...tbRows].sort((a, b) => a.cost - b.cost).filter((r) => tbFront.has(r.model));
 
 // ---- 跨榜重合：同一归一键（fuse.mjs canonKey）即同一模型，不再是约等于 ----
 //   DS 前沿名 → AA 同键的前沿变体（取 index 最高者展示）
@@ -112,14 +146,16 @@ const prepSvg = (file, id) => readFileSync(path.join(DIR, file), 'utf8')
   .replace('id="chart"', `id="${id}"`);
 const dsSvg = prepSvg('chart.svg', 'chart-code');
 const aaSvg = prepSvg('aa-chart.svg', 'chart-gen');
+const tbSvg = HAS_TB ? prepSvg('tb-chart.svg', 'chart-tb') : '';
 
-const usedFiles = [...new Set([...dsRows, ...aaRows].map((r) => logoFileOf(r.model)).filter(Boolean))];
+const usedFiles = [...new Set([...dsRows, ...aaRows, ...tbRows].map((r) => logoFileOfRow(r)).filter(Boolean))];
 const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 
 // ---- 模型名归一化 → OpenRouter 详情页链接（精确命中拼详情页，
 //   OR 无详情页的回退搜索页；见 openrouter.mjs，构建期算好注入页面） ----
 const DS_LINK = Object.fromEntries(dsRows.map((r) => [r.model, dsLink(r.model).url]));
 const AA_LINK = Object.fromEntries(aaRows.map((r) => [r.model, aaLink(r.model, r.creator).url]));
+const TB_LINK = Object.fromEntries(tbRows.map((r) => [r.model, tbLink(r.model, r.model_org).url]));
 const orMiss = [...Object.entries(DS_LINK), ...Object.entries(AA_LINK)]
   .filter(([, u]) => u.includes('/models?q=')).map(([m, u]) => `${m} -> ${u}`);
 if (orMiss.length) console.log('openrouter fallback(search):', orMiss.length, orMiss.join('; '));
@@ -176,7 +212,7 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>模型斩杀线：通用智力 × 长程编码能力</title>
+<title>模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #fafafa; color: #222; }
@@ -270,13 +306,14 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
 <div class="wrap">
-  <h1>🔪 模型斩杀线：通用智力 × 长程编码能力</h1>
+  <h1>🔪 模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}</h1>
   <div class="stale" id="stale-tip">⚠️ 数据已过期（生成于 <span id="stale-date">${GEN_DATE}</span>，距今超过 15 天），模型迭代较快请获取最新报告。</div>
-  <div class="sub">双榜 Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 长程编码能力 ${dsRows.length} 模型${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
+  <div class="sub">${HAS_TB ? '三榜' : '双榜'} Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 长程编码能力 ${dsRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-board="board-gen" role="tab" aria-selected="true">通用智力</button>
     <button class="tab" data-board="board-code" role="tab" aria-selected="false">长程编码能力</button>
+    ${HAS_TB ? `<button class="tab" data-board="board-tb" role="tab" aria-selected="false">终端智能</button>` : ''}
   </div>
 
   <div class="board" id="board-gen">
@@ -309,12 +346,28 @@ const html = `<!DOCTYPE html>
   </div>
   </div>
 
+  ${HAS_TB ? `
+  <div class="board hidden" id="board-tb">
+  <div class="card chart-box" id="card-tb">
+    ${tbSvg}
+    <div class="tooltip" id="tip-tb"></div>
+  </div>
+
+  <div class="card">
+    <h2>终端智能排名</h2>
+    <table>
+      <thead><tr><th>Rank</th><th>Model</th><th>Agent</th><th>Effort</th><th class="num">Accuracy</th><th class="num">Cost</th><th class="num">Tokens</th><th>Released</th></tr></thead>
+      <tbody id="tbody-tb"></tbody>
+    </table>
+  </div>
+  </div>` : ''}
+
   <div class="card">
     <h2>解读</h2>
     <div id="llm-obs">${OBS}</div>
   </div>
 
-  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://deepswe.datacurve.ai/${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
+  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://deepswe.datacurve.ai/${HAS_TB ? ' · https://www.tbench.ai' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
   <div class="gen-date">报告生成日期 ${GEN_DATE} · 榜单数据来自第三方公开来源，仅供学习交流，不构成选型或采购建议</div>
 </div>
 
@@ -329,6 +382,12 @@ const DS_FAST = new Set(${JSON.stringify([...dsFast])});
 const AA_FAST = new Set(${JSON.stringify([...aaFast])});
 const DS_LINK = ${JSON.stringify(DS_LINK)};
 const AA_LINK = ${JSON.stringify(AA_LINK)};
+const TB_ROWS = ${JSON.stringify(tbRows)};
+const TB_TABLE = ${JSON.stringify(tbBest)};
+const TB_SURVIVORS = new Set(${JSON.stringify([...tbFront])});
+const TB_FAST = new Set(${JSON.stringify([...tbFast])});
+const TB_LINK = ${JSON.stringify(TB_LINK)};
+const HAS_TB = ${JSON.stringify(HAS_TB)};
 const DS_FUSED = ${JSON.stringify(Object.fromEntries([...dsFused].map(([m, f]) => [m, { text: f.text, matched: f.matched, kind: f.kind }])))};
 const WITH_TM = ${JSON.stringify(WITH_TOP_MISSING)};
 const TM_SUCCESSORS = ${JSON.stringify(TM_SUCCESSORS)};
@@ -494,6 +553,76 @@ const tmCells = (m, numCols) => {
   }
 }
 
+// ---- TBench 表格 ----
+if (HAS_TB) {
+  const tbody = document.getElementById('tbody-tb');
+  const trByModel = new Map(); // 用于 unbench 插入"上一代"锚点上方
+  const trByCanon = new Map(); // 按 normalizeSlug 也建索引（AA-highlight succ 用 canon key 找锚点）
+  TB_TABLE.forEach((r, i) => {
+    const alive = TB_SURVIVORS.has(r.k);
+    const fast = !alive && TB_FAST.has(r.k);
+    const tr = document.createElement('tr');
+    tr.className = alive ? 'alive' : (fast ? 'fast' : '');
+    if (fast) tr.title = '高效：能力/成本被压制但 Run 平均 tok/s 更高（更快跑完），不是真被斩';
+    tr.dataset.url = TB_LINK[r.model];
+    tr.tabIndex = 0;
+    tr.innerHTML = \`<td>\${r.competition_rank || i + 1}</td>
+      <td class="model">\${alive ? '🔪 ' : (fast ? '⚡ ' : '')}\${orA(r.model, TB_LINK[r.model])}\${alive ? ' <span class="tag">高性价比</span>' : (fast ? ' <span class="tag tag-fast">高效</span>' : '')}</td>
+      <td>\${r.agent}</td>
+      <td><span class="eff" style="background:\${EFFORT_COLOR[r.effort]}">\${r.effort}</span></td>
+      <td class="num">\${r.accuracy_disp || r.accuracy + '%'}</td>
+      <td class="num">\${r.cost_disp || '$' + r.total_cost_usd.toFixed(0)}</td>
+      <td class="num">\${r.display_total_tokens}</td>
+      <td>\${r.date || '—'}</td>\`;
+    tbody.appendChild(tr);
+    trByModel.set(r.model, tr);
+    trByCanon.set(normalizeSlug(TB_LINK[r.model].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), '')), tr);
+  });
+  if (WITH_TM) {
+    // TB 表 8 列（Rank/Model/Agent/Effort/Accuracy/Cost/Tokens/Released），DS/AA 表是 7 列。
+    // 1) 上一代型：插入到对应锚点的正上方
+    for (const s of TM_SUCCESSORS.filter((x) => x.predecessor.board === 'tb')) {
+      const anchor = trByModel.get(s.predecessor.key) || trByCanon.get(s.predecessor.key);
+      if (!anchor) {
+        // AA highlight 但 TB 完全没这个 row：插表底并在 title 注明。
+        const tr = document.createElement('tr');
+        tr.className = 'unbench-succ';
+        tr.dataset.url = tmUrl(s);
+        tr.tabIndex = 0;
+        if (s.predecessor.via === 'aa-highlight-no-or') {
+          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），TB 暂缺（锚点不在 TB 表中）';
+        } else {
+          tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 TB 暂缺（推测锚点 ' + s.predecessor.key + ' 不在 TB 表中）';
+        }
+        tr.innerHTML = tmCells(s, 8);
+        tbody.appendChild(tr);
+        continue;
+      }
+      const tr = document.createElement('tr');
+      tr.className = 'unbench-succ';
+      tr.dataset.url = tmUrl(s);
+      tr.tabIndex = 0;
+      if (s.predecessor.via === 'aa-highlight-no-or') {
+        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），TB 暂缺；上一代疑似「' + s.predecessor.key + '」';
+      } else {
+        tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 TBench；推测为上一代「' + s.predecessor.key + '」的后续';
+      }
+      tr.innerHTML = tmCells(s, 8);
+      tbody.insertBefore(tr, anchor);
+    }
+    // 2) 纯免费型：按 OR 排名顺序（高位先）插到最顶部
+    for (const f of [...TM_FREE].reverse()) {
+      const tr = document.createElement('tr');
+      tr.className = 'unbench-free';
+      tr.dataset.url = tmUrl(f);
+      tr.tabIndex = 0;
+      tr.title = 'OR Top ' + f.rank + ' 免费模型（' + fmtWeekly(f.weekly_tokens) + '/周），三榜暂缺';
+      tr.innerHTML = tmCells(f, 8);
+      tbody.insertBefore(tr, tbody.firstChild);
+    }
+  }
+}
+
 // ---- 表格整行可点：点行内任意处（行内链接除外）新标签页打开 OpenRouter，回车/空格亦可 ----
 document.querySelectorAll('tbody tr[data-url]').forEach((tr) => {
   tr.addEventListener('click', (e) => {
@@ -565,6 +694,15 @@ bindTip('chart-gen', 'card-gen', 'tip-gen', (d) => {
     <div class="tip-row">\${m.creator} · Index: <b>\${m.index}</b> · Cost: <b>$\${(+m.cost).toFixed(2)}</b></div>
     <div class="tip-row">Speed: <b>\${m.speed} tok/s</b> · Latency: <b>\${m.latency}s</b></div>\`;
 });
+if (HAS_TB) bindTip('chart-tb', 'card-tb', 'tip-tb', (d) => {
+  const m = d.el.dataset;
+  const pct = (v) => v ? (+v * 100).toFixed(1) + '%' : '—';
+  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span><span class="tip-effort" style="background:\${EFFORT_COLOR[m.effort]}">\${m.effort}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
+    <div class="tip-row">Agent: <b>\${m.agent}</b> · TBench 4.0 Accuracy: <b>\${m.acc}%</b>\${m.ci ? ' (±' + m.ci + '%)' : ''}</div>
+    <div class="tip-row">总成本: <b>\${m.costTotal || '—'}</b> · 每任务: <b>$\${(+m.cost).toFixed(2)}</b> · Tokens: <b>\${m.tokens}</b></div>
+    <div class="tip-row">Released: <b>\${m.date || '—'}</b> · Run 均速: <b>\${m.speed ? m.speed + ' tok/s' : '—'}</b></div>
+    <div class="tip-row">pass@2: <b>\${pct(m.p2)}</b> · pass@5: <b>\${pct(m.p5)}</b></div>\`;
+});
 </script>
 </body>
 </html>`;
@@ -573,4 +711,5 @@ writeFileSync(OUT, html);
 console.log('index.html bytes:', html.length, '→', OUT);
 console.log(`deepswe frontier: ${dsFront.size}/${dsRows.length}, zone: ${dsZone.length}, worst: ${dsWorst.model}/$${dsWorst.avg_cost}`);
 console.log(`aa frontier: ${aaFront.size}/${aaRows.length}, zone: ${aaZone.length}, worst: ${aaWorst.model}/$${aaWorst.cost}`);
+console.log(`tb frontier: ${tbFront.size}/${tbRows.length}, zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
 console.log('overlap:', overlap.length ? overlap.map(([d, a]) => `${d} = ${a}`).join('; ') : '(none)');
