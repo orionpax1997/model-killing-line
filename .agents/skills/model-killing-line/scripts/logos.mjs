@@ -10,7 +10,13 @@ import { fileURLToPath } from 'node:url';
 export const LOGO_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'logos');
 
 export const logoFileOf = (m) => {
-  const s = m.toLowerCase();
+  // 分隔符先归一化：三家给同一个模型的写法不一样——
+  //   MiMo  V2.6 Flash (CommandCode)  |  MiMo-V2.6  (AA)
+  //   Tencent Hy3   (CommandCode)    |  hy3        (TB)
+  // 直接 startsWith('mimo-') / startsWith('hy3') 就会漏掉 CommandCode 那一侧，
+  // 表现为同一模型在 AA tab 有 logo、在 CommandCode tab 退化成实心小圆点。
+  // 所以把空格/连字符/下划线都压成 '-' 再匹配前缀，规则本身保持可读。
+  const s = m.toLowerCase().replace(/[\s_]+/g, '-');
   if (s.startsWith('gpt-')) return 'chatgptlogo.png';
   if (s.startsWith('gemini')) return 'gemini-sparkle.png';
   if (s.startsWith('claude')) return 'anthropic-1.svg';
@@ -22,9 +28,10 @@ export const logoFileOf = (m) => {
   if (s.startsWith('muse')) return 'metalogo.png';
   if (s.startsWith('mimo-')) return 'xiaomi-logo.png';
   if (s.startsWith('minimax')) return 'minimax.png';
-  if (s.startsWith('hy3')) return 'tencent.png';
+  if (s.startsWith('hy3') || s.startsWith('tencent-hy')) return 'tencent.png';
   if (s.startsWith('inkling')) return 'thinkingmachines-logo.png';
   if (s.startsWith('nemotron')) return 'nvidialogo.png';
+  if (s.startsWith('step')) return 'stepfun.png';
   return null;
 };
 

@@ -1,13 +1,14 @@
 ---
 name: model-killing-line
-description: "Draws the 模型斩杀线 - Pareto-frontier scatters (DeepSWE PASS@1 vs Avg Cost + Artificial Analysis Intelligence Index vs Cost per Task + Terminal-Bench 4.0 Accuracy vs Cost per Task) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, DeepSWE chart, AA chart, TBench/Terminal-Bench chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://deepswe.datacurve.ai/, https://artificialanalysis.ai/leaderboards/models and https://www.tbench.ai/."
+description: "Draws the 模型斩杀线 - Pareto-frontier scatters (DeepSWE PASS@1 vs Avg Cost + Artificial Analysis Intelligence Index vs Cost per Task + Terminal-Bench 4.0 Accuracy vs Cost per Task + CommandCode Max 10× 智力 vs 每月可跑请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, DeepSWE chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://deepswe.datacurve.ai/, https://artificialanalysis.ai/leaderboards/models, https://www.tbench.ai and https://commandcode.ai/docs/plans/max."
 ---
 
 # model-killing-line
 
 Zero-argument skill. Fetches the DeepSWE leaderboard, the Artificial
-Analysis model leaderboard, and (可选) the TBench / Terminal-Bench 4.0
-leaderboard, computes each Pareto frontier, and emits a
+Analysis model leaderboard, (可选) the TBench / Terminal-Bench 4.0
+leaderboard, and (可选) the CommandCode Max 10× plan, computes each Pareto
+frontier, and emits a
 single-page `index.html` with switchable sections (tab 切换，默认通用智力，
 解读常驻) — chart + table per board 由脚本生成，解读由 LLM 每次实时撰写（脚本不写解读文案）,
 
@@ -31,6 +32,11 @@ single-page `index.html` with switchable sections (tab 切换，默认通用智�
   表格的 alive/⚡ 标记与之三态一致（故 GLM-5.3 这类模型级 rank 5 也可能因被
   Astra low/high 更便宜更强地压制而不在斩杀线上）。
   效率维用 Run 平均 token 流速 total_tokens ÷ (avg_trial_duration_sec × n_trials)。
+- ④ CommandCode 斩杀线（数据源 CommandCode 官方文档，可选）: X = Max 10× 官方
+  `Requests / month`（log 轴，向右＝更能跑），Y = 智力指数。右上方高性价比区 =
+  智力 ≥ 35 且 ≥ 100K 次/月。**只做 Max 10×**——OpenCode / Pro plan 的请求数、
+  Max 20× 的额度都不能混进来（口径不同，混了图就没意义）。详见下面
+  「CommandCode tab 的口径与过滤规则」一节，那一节是本 tab 的行为契约，改动前先读。
 - 解读只有一块: 由 LLM 每次实时根据最新数据自由撰写，脚本不生成解读文案，只提供数据。
 
 Frontier models render as logo circles with callout labels, everyone else
@@ -48,11 +54,13 @@ node .pi/skills/model-killing-line/scripts/fetch.mjs              # → $TMPDIR/
 node .pi/skills/model-killing-line/scripts/fetch-aa.mjs           # → $TMPDIR/model-killing-line/aa-data.json (~79 rows, AA)
 node .pi/skills/model-killing-line/scripts/fetch-tb.mjs            # → $TMPDIR/model-killing-line/tb-data.json (27 rows, Terminal-Bench 4.0) — 可选
 node .pi/skills/model-killing-line/scripts/fetch-openrouter.mjs   # → $TMPDIR/model-killing-line/or-data.json (Top 30 from OpenRouter Top Weekly, text modality) — 可选
+node .pi/skills/model-killing-line/scripts/fetch-plans.mjs         # → $TMPDIR/model-killing-line/plans-data.json (CommandCode Max 10×) — 可选
 node .pi/skills/model-killing-line/scripts/find-top-missing.mjs   # → $TMPDIR/model-killing-line/top-missing.json (OR Top 20 里没上双榜的模型) — 可选
 node .pi/skills/model-killing-line/scripts/render.mjs             # → $TMPDIR/model-killing-line/chart.svg (logos inlined as data URIs)
 node .pi/skills/model-killing-line/scripts/render-aa.mjs          # → $TMPDIR/model-killing-line/aa-chart.svg
 node .pi/skills/model-killing-line/scripts/render-tb.mjs          # → $TMPDIR/model-killing-line/tb-chart.svg — 可选（和 fetch-tb 成对）
-node .pi/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；存在 tb-data.json + tb-chart.svg 时自动加「终端智能」tab；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
+node .pi/skills/model-killing-line/scripts/render-plans.mjs       # → $TMPDIR/model-killing-line/plans-chart.svg — 可选（和 fetch-plans 成对）
+node .pi/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；存在 tb-data.json + tb-chart.svg 时自动加「终端智能」tab，存在 plans-data.json + plans-chart.svg 时再自动加「CommandCode」tab；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
 # LLM 看完本轮数据后自由撰写解读 HTML 片段，存文件后注入：
 node .pi/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing] --obs /tmp/mkl-obs.html  # --obs <html文件|->（- 从 stdin 读；MKL_OBS 传路径亦可）
 node .pi/skills/model-killing-line/scripts/open.mjs               # auto-open index.html in default browser
@@ -119,6 +127,17 @@ see below. The scripts read/write via cwd and need only node stdlib.
   其余档只画圆点不弹气泡——避免 4 个 Astra 气泡挤在 y≈50-58 区互相避让后压住旁边点；
   前后端统一用 uid = model+effort+agent 判定（图上/表格/tooltip 三态一致）。
   logo 按 model_org 选（TB 模型名无品牌前缀，见 logos.mjs 的 ORG_LOGO_FILE）。
+- `fetch-plans.mjs`: GETs `https://commandcode.ai/docs/plans/max`（官方
+  `Requests / 5 hours / week / month` 请求表 + 价格表）和
+  `https://commandcode.ai/docs/plans/pro`（CommandCode 自家的 `Intelligence` 列，
+  以及**只存在于 Pro 页**的 peak 时段价）。输出的 `requests_*` 全部直接引用官方值，
+  **不做二次推算**（自算 token 口径值只留作 `est_requests_month` / `est_vs_official`
+  做 QA 校验，不参与坐标 / zone / Pareto）。Pro 页的脏模型名（`MiMo V2.5 -98%`、
+  `Grok 4.7-40%Ends September 27, 2026`、`DeepSeek V4.1 FlashOff-peak shown …`、
+  `JevDecision model …`、`Pixel CanaryFree`）由 `cleanCcName()` 清洗。
+- `render-plans.mjs`: 结构同前三个，但**前沿大圆不做 de-clutter**（见下），
+  `data-tier` / `data-contributor` / `data-peakwin` 属性，peak 孪生点用虚线环 +
+  从 off-peak 拉细连线，Contributor 用橙色虚线大圈 + 两行标注。
 
 - `fuse.mjs`: 跨榜归一化融合（纯字符串计算，无网络）。归一键 =
   `openrouter.mjs` 的 `normalizeSlug`（两榜同一模型 → 同一 key）。
@@ -143,8 +162,9 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
   `dsLink(model)` 按前缀定 org；个例进 `SLUG_OVERRIDE`，OR 无详情页的进
   `SEARCH_ONLY` 回退搜索页）。新增模型先 curl 验 title 非软 404 再进映射。
 - `gen-html.mjs`: inlines the SVGs (`chart-deepswe` + `chart-aa`, 以及存在 tb-chart.svg
-  时第三个 `chart-tb`) + all JSONs + shared `LOGO_MAP` into `index.html`: two (带 TB 数据则
-  three) independent chart+table sections + tabs, one joint 解读卡片（见下「解读：LLM 实时撰写」——
+  时第三个 `chart-tb`、存在 plans-chart.svg 时第四个 `chart-plans`) + all JSONs + shared
+  `LOGO_MAP` into `index.html`: two (带 TB 数据则 three, 再带 CommandCode 数据则 four)
+  independent chart+table sections + tabs, one joint 解读卡片（见下「解读：LLM 实时撰写」——
   脚本只在卡片里留 `<div id="llm-obs">` 空位 + 把数据以 JSON 形式内联进页面供
   LLM 读取，不生成任何解读文案，不硬编码模型名）。页头有小字生成日期
   （构建时写入）+ JS 过期判断：打开时间距生成日期超过 15 天则显示数据过期提示。Tooltips
@@ -241,6 +261,71 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
 不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
 缺测"说成"不推荐"；用 DS/TB 的缺测率来评价 AA 上的高 Index 模型。
 
+## CommandCode tab 的口径与过滤规则
+
+这一节是 ④ tab 的**行为契约**。前三 tab 的规则大多可以照搬，这里不行——CommandCode
+的官方数据有它自己的坑，绕过下面任一条会得到一张好看但错的图。
+
+### 口径（绘图数据必须来自官方值）
+- **X 轴 = 官方 `Requests / month`**（log 轴，向右＝更能跑）。`requests_5h` / `requests_week`
+  也直接引用官方值。**不要用自算 token 公式反推主数据**——自算会引入 1%~11% 的偏差
+  （实测比官方低）。自算值只留作 `est_requests_month` / `est_vs_official` 做 QA。
+- **只做 Max 10×**。OpenCode / Pro plan 的请求数、Max 20× 的额度是另一套口径。
+- **Y 轴 = 智力，CC 优先 / AA 兜底**：`index = cc_intel ?? aa_index`。CommandCode 的
+  Intelligence 表有分模型 60 个，AA 规范模型只有 35 个；单用 AA 会把一批有分的模型
+  挡在图外。保留 `index_source` / `cc_intel` / `aa_index` / `aa_model` 字段备查。
+  CC 保留 1 位小数，AA 取整。⚠️ `null >= -Infinity` 在 JS 里是 `true`（null→0），所以
+  前沿扫描必须先 `if (r.index == null) continue`，否则待更新模型会被当成「智力 0 的新纪录」。
+- **高性价比区在右上**（请求数越多越好，智力越高越好）：`index ≥ 35 && requests_month ≥ 100000`。
+
+### 过滤（按顺序，缺一不可）
+1. **AA 变体去重**：同一模型的多个 AA 变体只留一个（官方请求数最多的那个）。
+2. **族内弱支配过滤**（`kept` / `superseded`）：同族里新一代 `index >=` 且
+   `requests >=` 上一代、至少一项严格更高，就删旧代。**不能简单「每族只留最高版本」**——
+   会误删真实的取舍档位（Pro / Mini / Lite / Flash）。典型保留点：MiniMax M2.5、
+   Gemini 3.1 Flash Lite、Step 3.7 Flash、Kimi K2.5、GPT-5.6 Terra。
+   `index == null` 的行两边都不参与（没有 Y 值可比），既不会被删也不会删别人。
+3. **同请求数去重**：同族里官方月请求数**完全相同**（= 官方给了同一个价）的多代只留最新。
+   典型：Claude Opus 4.6/4.7/4.8/5 全是 2,990 次/月（同价 $5/$25/$0.5），只留 Opus 5。
+   这条**对 `index == null` 的模型也生效**（支配判定对它们无效），也是它与第 2 条
+   必须分开写的原因。同代（`gen` 相同）撞数不动。
+4. **peak / off-peak 孪生拆分**：Pro 页 Model 列内嵌 `· peak $in / $out 01–04 & 06–10 UTC,
+   Mon–Fri`。Max 页价格表**只给 off-peak 价**。有 peak 价的模型拆成两行，
+   `model` 分别加 ` (off-peak)` / ` (peak)` 后缀，`requests_*` 全部 **÷ ratio**
+   （ratio = peak_in ÷ off_peak_in，官方只给 in/out 两个价，cache 按同一倍率缩放）。
+   **用倍率缩放而不是重算成本**——重算会带进 token 口径误差，倍率缩放是精确的。
+   peak 行标 `tier: 'peak'`，支配判定与同请求数去重都必须**按 tier 隔离**
+   （off-peak 会把 peak 当成「被支配的旧代」删掉）。
+
+### Pareto 与分层
+- `MIN_STEP = 0.5`：相对上一个**真正入选**的阶梯点，智力至少提升 0.5。被跳过的点
+  不能抬高 `best`（否则噪声会抬高后续所有门槛）。`gen-html` 侧表格的 🔪 扫描用同一常量
+  `PLANS_MIN_STEP`，保证图上阶梯数与表格 🔪 数一致。
+- **Contributor 不进主 Pareto**，单独用橙色虚线圈 + 两行标注（图上文字「数据换折扣」/
+  「不计入阶梯」，图例 `数据换折扣 · 不计入阶梯`）。原因：Muse Spark 1.3 Contributor
+  智力 48.1 / 682K 次·月，计入会吃掉除 Claude Opus 5.5 外的所有阶梯点，5 步压成 2 步。
+  机制写「数据换折扣」**不要写「5 折」**——官方价格表显示 input ≈ 常规版 1/12.5、
+  output ≈ 1/21.25、cache ≈ 1/75。
+- **前沿大圆不做 de-clutter**：固定画在真实坐标上，R = 15。理由：原来沿径向推开 +
+  细线连回真实坐标，peak 孪生点把 `DeepSeek V4.1 Flash (off-peak)` 顶开 34px，
+  一条这么长的引线会让人误读成「点其实在那儿」——而斩杀线的语义就是真实位置。
+  缩小图标和去掉 de-clutter**必须一起做**：Flash(487k,38) 与 DeepSeek(385k,39.5)
+  圆心距 32.7px，R=18 时两圆相交，R=15 时（2R=30）刚好不相交。callout 标签另有
+  自己的碰撞布局，会自动避开真实位置的大圆。
+
+### 表格与 UI 约束
+- 表格**只有 4 列**：`#` / `Model` / `智力` / `次/月`。
+- 徽标：`🔪 高性价比`（在 Pareto 阶梯上）+ `🆕 待更新`（`index == null`）；
+  Contributor 例外，给 `🔪 高性价比` + `贡献数据` 两个（它两轴都是全场最好，只因不计入
+  主阶梯而拿不到 front；不标会让表里性价比最高的行看起来平平无奇）。
+  **不要**加「⚡ 高效」（本表没有 Tokens/s，快慢无从谈起）、**不要**露出
+  「映射存疑」/「合并了 …」/ 额度池·premium 任何字样。
+- `index == null` 的模型**不丢弃**，智力列显示 `—` + `🆕 待更新`。
+  同族按 `family` 分块、块间按族内最高智力排、块内先放有智力的再按代际倒序
+  （新一代在上一代的上一行），同代 tiebreak 放 off-peak 在 peak 前。
+- **tooltip 只留 2 行硬数据**（规格对齐 AA tab 的 `chart-gen`）：head + 智力/次月 +
+  次周/次5h。不要加口径解释、自算对照、AA 兜底详情。
+
 ## Thresholds (edit in render.mjs, never ask the user)
 
 - `ZONE_COST` / `ZONE_PASS` (`2.5` / `50`): DeepSWE efficient-zone rectangle.
@@ -265,5 +350,9 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
 - `logos/` (27 files, ~464KB, designarena `model-logos`, resized to 128px)
   ships with the skill and is inlined at build time; nothing is copied to
   the output dir. Logo mapping lives in `logoFileOf()` in
-  `scripts/logos.mjs` (case-insensitive prefix match, e.g. `gpt-` → OpenAI
-  logo); add a line there when new labs appear.
+  `scripts/logos.mjs` (case-insensitive prefix match on a **separator-normalized**
+  name, e.g. `gpt-` → OpenAI logo); add a line there when new labs appear.
+  归一化不是洁癖：三家写同一个模型的方式不同（`MiMo V2.6 Flash` in CommandCode vs
+  `MiMo-V2.6` in AA；`Tencent Hy3` vs `hy3`），不先把空格/下划线压成 `-` 就会表现为
+  「同一模型在 A tab 有 logo、在 B tab 退化成小圆点」。改完跑一遍 14 条老前缀的回归。
+  `logos/` 里没有对应文件的（LongCat / Fugu / Jev）会回退到字母 logo。

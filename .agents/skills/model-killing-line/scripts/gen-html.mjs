@@ -46,9 +46,14 @@ for (const f of ['data.json', 'chart.svg', 'aa-data.json', 'aa-chart.svg']) {
 // TBench（Terminal-Bench 4.0）第三个榜为可选：tb-data.json + tb-chart.svg 都存在才启用终端智能 tab
 const HAS_TB = existsSync(path.join(DIR, 'tb-data.json')) && existsSync(path.join(DIR, 'tb-chart.svg'));
 if (!HAS_TB) console.log('TBench: tb-data.json/tb-chart.svg 未找到，跳过「终端智能」榜（跑 fetch-tb → render-tb 可启用）');
+// CommandCode 榜（Max 10× 每月可跑请求数 × AA Index）第四个榜为可选：plans-data.json + plans-chart.svg
+const HAS_PLANS = existsSync(path.join(DIR, 'plans-data.json')) && existsSync(path.join(DIR, 'plans-chart.svg'));
+if (!HAS_PLANS) console.log('Plans: plans-data.json/plans-chart.svg 未找到，跳过「CommandCode」榜（跑 fetch-plans → render-plans 可启用）');
 
 const dsRows = JSON.parse(readFileSync(path.join(DIR, 'data.json'), 'utf8'));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
+const plansData = HAS_PLANS ? JSON.parse(readFileSync(path.join(DIR, 'plans-data.json'), 'utf8')) : null;
+const plansRows = plansData?.rows ?? [];
 
 rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
 
@@ -101,6 +106,29 @@ const tbNumSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
 // 斩杀线用全变体口径（同 render-tb.mjs）：所有 effort 变体都参与 Pareto；
 // 页面表格是每模型最佳变体的模型级视图（tbBest），两者都保留
 const tbFront = pareto2(tbRows, (r) => r.cost, (r) => r.accuracy, (r) => r.k);
+// CommandCode 榜：X = 单次请求成本 $/1000 次（代价轴），Y = AA Index，和前三张榜同构。
+// 不用 requests_month 当横轴：那个量带额度池差异（standard $150 / premium $100），
+// premium 模型会整体左移约 48px，看起来更便宜其实只是额度少。cost_per_1k 是纯 API 价。
+const plansMain = plansRows.filter((r) => !r.contributor);
+// MIN_STEP 必须和 render-plans.mjs 里的 paretoOf 保持一致，否则表格的 🔪 会和图上的
+// 阶梯对不上（曾经图上 5 步、表格标 6 个 🔪）。改动时两边同步。
+const PLANS_MIN_STEP = 0.5;
+const plansFrontNames = (() => {
+  const names = new Set();
+  let best = -Infinity;
+  for (const r of [...plansMain].sort((a, b) => b.requests_month - a.requests_month)) {
+    // 必须跳过 index == null：JS 里 `null >= -Infinity` 求值为 true（null→0），不挡的话
+    // 第一个待更新模型会被当成"智力 0 的新纪录"记进阶梯，表格里给它挂 🔪。
+    if (r.index == null) continue;
+    if (r.index >= best + PLANS_MIN_STEP) { best = r.index; names.add(r.model); }
+  }
+  return names;
+})();
+const plansFront = new Set(plansFrontNames);
+const plansZone = plansRows.filter((r) => r.index >= 35 && r.requests_month >= 100000);
+const plansWorst = plansRows
+  .filter((r) => !plansFront.has(r.model) && !r.contributor)
+  .reduce((a, b) => (a && a.index <= b.index && a.requests_month <= b.requests_month ? a : b), null);
 // DS 效率维 = 复合效率 E = AA 融合 Tokens/s ÷ DS 自身 Steps（同名优先同 effort，无同名/无 steps → -Inf）——见 fuse.mjs
 const aaIndex = buildAaIndex(aaRows);
 const dsFused = new Map(dsRows.map((r) => [r.model, fusedSpeed(r, aaIndex)]));
@@ -147,8 +175,10 @@ const prepSvg = (file, id) => readFileSync(path.join(DIR, file), 'utf8')
 const dsSvg = prepSvg('chart.svg', 'chart-code');
 const aaSvg = prepSvg('aa-chart.svg', 'chart-gen');
 const tbSvg = HAS_TB ? prepSvg('tb-chart.svg', 'chart-tb') : '';
+const plansSvg = HAS_PLANS ? prepSvg('plans-chart.svg', 'chart-plans') : '';
 
-const usedFiles = [...new Set([...dsRows, ...aaRows, ...tbRows].map((r) => logoFileOfRow(r)).filter(Boolean))];
+const usedFiles = [...new Set([...dsRows, ...aaRows, ...tbRows, ...plansRows]
+  .map((r) => logoFileOfRow(r) ?? (r.aa_model ? logoFileOf(r.aa_model) : null)).filter(Boolean))];
 const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 
 // ---- 模型名归一化 → OpenRouter 详情页链接（精确命中拼详情页，
@@ -207,12 +237,13 @@ const tmBadge = (m) => m.is_free
   : '<span class="tag tag-warn">🆕 待更新</span>';
 
 const GEN_DATE = new Date().toISOString().slice(0, 10);
+const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}</title>
+<title>模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #fafafa; color: #222; }
@@ -268,6 +299,9 @@ const html = `<!DOCTYPE html>
   tbody tr[data-url] { cursor: pointer; transition: background .12s; }
   tbody tr[data-url]:hover { background: #edf3fe; }
   tbody tr.alive[data-url]:hover { background:#dcefdc; }
+/* CommandCode 免费档：青底，和前 3 个 tab 的 🆓 免费行同一套视觉语言 */
+tr.free { background: #e7f2f7; }
+tbody tr.free[data-url]:hover { background:#d5e8f1; }
   tbody tr.fast[data-url]:hover { background: #d9e5fa; }
   tbody tr[data-url]:focus-visible { outline: 2px solid #1a73e8; outline-offset: -2px; }
   tbody tr:hover .model a { color: #1a73e8; text-decoration: underline; text-underline-offset: 3px; }
@@ -302,18 +336,21 @@ const html = `<!DOCTYPE html>
   .model .model-sub { display: block; font-size: 11px; color: #6b6b6b; font-weight: normal; margin-top: 3px; line-height: 1.45; }
   .model .tag-warn { background: #c98415; }
   .model .tag-free { background: #1971c2; }
+  .model .tag-deal { background: #c98415; }
+    .model .tag-warn2 { background: #8a8a8a; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>🔪 模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}</h1>
+  <h1>🔪 模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</h1>
   <div class="stale" id="stale-tip">⚠️ 数据已过期（生成于 <span id="stale-date">${GEN_DATE}</span>，距今超过 15 天），模型迭代较快请获取最新报告。</div>
-  <div class="sub">${HAS_TB ? '三榜' : '双榜'} Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 长程编码能力 ${dsRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
+  <div class="sub">${[HAS_TB || HAS_PLANS ? (HAS_TB && HAS_PLANS ? '四榜' : '三榜') : '双榜'].slice(0, 0)}Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 长程编码能力 ${dsRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${HAS_PLANS ? ` / CommandCode ${plansRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-board="board-gen" role="tab" aria-selected="true">通用智力</button>
     <button class="tab" data-board="board-code" role="tab" aria-selected="false">长程编码能力</button>
     ${HAS_TB ? `<button class="tab" data-board="board-tb" role="tab" aria-selected="false">终端智能</button>` : ''}
+    ${HAS_PLANS ? `<button class="tab" data-board="board-plans" role="tab" aria-selected="false">CommandCode</button>` : ''}
   </div>
 
   <div class="board" id="board-gen">
@@ -362,12 +399,28 @@ const html = `<!DOCTYPE html>
   </div>
   </div>` : ''}
 
+  ${HAS_PLANS ? `
+  <div class="board hidden" id="board-plans">
+  <div class="card chart-box" id="card-plans">
+    ${plansSvg}
+    <div class="tooltip" id="tip-plans"></div>
+  </div>
+
+  <div class="card">
+    <h2>CommandCode 智力 × 调用次数</h2>
+    <table>
+      <thead><tr><th>#</th><th>Model</th><th class="num" title="CommandCode 自家 Intelligence 优先，取不到才用 AA 兜底">智力</th><th class="num" title="CommandCode 官方发布的每月可跑请求数（原样引用，未二次推算）">次/月</th><th class="num" title="CommandCode 官方标注的上下文窗口">Context</th></tr></thead>
+      <tbody id="tbody-plans"></tbody>
+    </table>
+  </div>
+  </div>` : ''}
+
   <div class="card">
     <h2>解读</h2>
     <div id="llm-obs">${OBS}</div>
   </div>
 
-  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://deepswe.datacurve.ai/${HAS_TB ? ' · https://www.tbench.ai' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
+  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://deepswe.datacurve.ai/${HAS_TB ? ' · https://www.tbench.ai' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
   <div class="gen-date">报告生成日期 ${GEN_DATE} · 榜单数据来自第三方公开来源，仅供学习交流，不构成选型或采购建议</div>
 </div>
 
@@ -388,6 +441,10 @@ const TB_SURVIVORS = new Set(${JSON.stringify([...tbFront])});
 const TB_FAST = new Set(${JSON.stringify([...tbFast])});
 const TB_LINK = ${JSON.stringify(TB_LINK)};
 const HAS_TB = ${JSON.stringify(HAS_TB)};
+const HAS_PLANS = ${JSON.stringify(HAS_PLANS)};
+const PLANS_ROWS = ${JSON.stringify(plansRows)};
+const PLANS_SURVIVORS = new Set(${JSON.stringify([...plansFront])});
+const PLANS_LINK = ${JSON.stringify(Object.fromEntries(plansRows.map((r) => [r.model, dsLink(r.model).url])))};
 const DS_FUSED = ${JSON.stringify(Object.fromEntries([...dsFused].map(([m, f]) => [m, { text: f.text, matched: f.matched, kind: f.kind }])))};
 const WITH_TM = ${JSON.stringify(WITH_TOP_MISSING)};
 const TM_SUCCESSORS = ${JSON.stringify(TM_SUCCESSORS)};
@@ -623,6 +680,92 @@ if (HAS_TB) {
   }
 }
 
+// ---- CommandCode 表格 ----
+if (HAS_PLANS) {
+  const tbody = document.getElementById('tbody-plans');
+  const fmtK = (v) => v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1000 ? Math.round(v / 1000) + 'k' : String(Math.round(v));
+  // ---- 排序：按族分块，块内新一代在上一代的上一行 ----
+  // 直接按 index 降序排会散掉同族（比如 Kimi K2.7 Code 智力 25.8 会被 K2.6 的 27 压到下面，
+  // 明明 K2.7 更新一代）。这里改成：
+  //   块间：按族内最高智力降序（整族都没智力就按最高请求数），所以表格从上到下是"最强的家系"在前
+  //   块内：gen 倒序（5.5 → 5 → 4.8 → 4.7 → 4.6），同代内再按智力降序
+  //   待更新（index == null）：同块内排在有智力的之后，但**不拆散同族**——它们仍是官方
+  //     价格表里的模型，次数是官方实数，只是还没人给分。丢掉等于让 CommandCode 上新模型
+  //     从榜单上凭空消失，而这个 tab 的主要价值恰恰是次数。
+  const vnum = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), undefined, { numeric: true });
+  // 免费档（官方写 Free、不限量）**置顶**，不进族分块。原因：它和付费档不可比——
+  // requests_month 是 null，按次数排序会让它落到表底或者直接消失，但"这几个模型不要钱"
+  // 恰恰是这张表最该先让人看到的信息。徽标沿用前 3 个 tab 的 🆓 免费约定。
+  const PLANS_FREE = PLANS_ROWS.filter((r) => r.free);
+  const PLANS_FAM_ORDER = (() => {
+    const fams = new Map();
+    for (const r of PLANS_ROWS) {
+      if (r.free) continue;
+      if (!fams.has(r.family)) fams.set(r.family, []);
+      fams.get(r.family).push(r);
+    }
+    const blocks = [...fams.values()].map((arr) => ({
+      arr,
+      // 块间排序键：有智力取最高智力；整块都没智力就退到最高请求数，保证待更新的家系也有位置
+      key: arr.some((r) => r.index != null) ? Math.max(...arr.map((r) => r.index ?? -Infinity)) : -1e9 + arr[0].requests_month / 1e9,
+    }));
+    blocks.sort((a, b) => b.key - a.key);
+    // PLANS_FREE 必须包成 {arr} —— blocks 里每项都是 {arr, key}，下面统一 b.arr.sort()。
+    // 直接把裸数组塞进数组字面量会在渲染第一行时抛 undefined.sort，整表 0 行且控制台无提示。
+    return [{ arr: PLANS_FREE, key: Infinity }, ...blocks].flatMap((b) =>
+      b.arr.sort((x, y) =>
+        (x.index == null ? 1 : 0) - (y.index == null ? 1 : 0) ||   // 有智力的先
+        vnum(y.gen, x.gen) ||                                      // 新一代在上
+        ((x.tier ?? 'off-peak') === (y.tier ?? 'off-peak') ? 0 :     // 同代：off-peak 在 peak 前
+          (x.tier === 'peak' ? 1 : -1)) ||
+        (x.index ?? 0) - (y.index ?? 0) ||                          // 同代：智力降序
+        y.requests_month - x.requests_month));
+  })();
+
+  PLANS_FAM_ORDER.forEach((r, i) => {
+    const alive = PLANS_SURVIVORS.has(r.model);
+    const tr = document.createElement('tr');
+    tr.dataset.url = PLANS_LINK[r.model];
+    tr.tabIndex = 0;
+    // 「🔪 高性价比」＝ 在 Pareto 阶梯上（front），和前 3 个 tab 的 alive 完全同构
+    // （🔪 作前缀符号 + tag 文字）。右上高性价比区（智力 ≥ 35 且 ≥ 100K 次/月）不给徽标：
+    // 它和阶梯高度重叠，单独标会把「落在区里但被支配」和「真在阶梯上」混为一谈，
+    // 而这图恰恰要你看清这个差别。
+    // 曾经还有「⚡ 高效」，是照搬前 3 个 tab 的 fast（"能力/成本被压制但更快，不是真被斩"）——
+    // 但 CommandCode 这张表**没有 Tokens/s**，快慢无从谈起，那套判据在这里没有意义，所以去掉。
+    // 早期还有「折扣层」和「映射存疑」，前者是 Contributor 的旧称。
+    //
+    // Contributor（Muse Spark 1.3 Contributor）是个例外，单独两个徽标：
+    //   🔪 高性价比 —— 它智力 48.1、682K 次/月，两轴都是全场最好，只因为不计入主阶梯才拿不到 front；
+    //                  不标就等于让表格里性价比最高的行看起来平平无奇。
+    //   贡献数据 —— 说明这个价格是拿数据换来的（官方表里单价约为同款常规版的 1/12～1/21～1/75），
+    //                  和「普通订阅就能拿到」不是一回事，值得在表里就提醒。
+    // 🔪 前缀也跟着加：它虽然不在阶梯上，但确实是这张表里最值得买的一行。
+    const pending = r.index == null;
+    const good = alive || r.contributor;
+    tr.className = r.free ? 'free' : (good ? 'alive' : '');
+    const bits = [];
+    // 免费档没有智力分也不打 🆕——「未评分」和「不要钱」是两件事，同时挂两个徽标
+    // 会让人以为等评分之后它就收费了。
+    if (r.free) {
+      bits.push(' <span class="tag tag-free">🆓 免费</span>');
+      if (pending) bits.push(' <span class="tag tag-warn">🆕 待更新</span>');
+    }
+    else if (pending) bits.push(' <span class="tag tag-warn">🆕 待更新</span>');
+    else if (alive) bits.push(' <span class="tag">🔪 高性价比</span>');
+    if (r.contributor) bits.push(' <span class="tag">🔪 高性价比</span><span class="tag">贡献数据</span>');
+    tr.title = r.contributor
+      ? '数据换折扣档：官方表里单价约为同款常规版的 1/12（in）～1/21（out）～1/75（cache），低 1~2 个数量级（不是 5 折）。不计入 Pareto 阶梯：它智力 48.1 且 682K 次/月，计入会吃掉除 Claude Opus 5.5 外的所有阶梯点，5 步压成 2 步'
+      : '';
+    tr.innerHTML = \`<td>\${i+1}</td>
+      <td class="model">\${good ? '🔪 ' : ''}\${orA(r.model, PLANS_LINK[r.model])}\${bits.join('')}
+      <td class="num">\${pending ? '—' : r.index}</td>
+      <td class="num">\${r.free ? '不限量' : fmtK(r.requests_month)}</td>
+      <td class="num">\${r.context ?? '—'}</td>\`;
+    tbody.appendChild(tr);
+  });
+}
+
 // ---- 表格整行可点：点行内任意处（行内链接除外）新标签页打开 OpenRouter，回车/空格亦可 ----
 document.querySelectorAll('tbody tr[data-url]').forEach((tr) => {
   tr.addEventListener('click', (e) => {
@@ -702,7 +845,31 @@ if (HAS_TB) bindTip('chart-tb', 'card-tb', 'tip-tb', (d) => {
     <div class="tip-row">总成本: <b>\${m.costTotal || '—'}</b> · 每任务: <b>$\${(+m.cost).toFixed(2)}</b> · Tokens: <b>\${m.tokens}</b></div>
     <div class="tip-row">Released: <b>\${m.date || '—'}</b> · Run 均速: <b>\${m.speed ? m.speed + ' tok/s' : '—'}</b></div>
     <div class="tip-row">pass@2: <b>\${pct(m.p2)}</b> · pass@5: <b>\${pct(m.p5)}</b></div>\`;
+});if (HAS_PLANS) bindTip('chart-plans', 'card-plans', 'tip-plans', (d) => {
+  const m = d.el.dataset;
+  const tags = [];
+  // 与表格同一套判定：front 来自 render-plans.mjs 的 paretoOf。zone（右上高性价比区）
+  // 故意不给徽标，理由见表格侧注释。
+  // 与表格同一套判定：Contributor 不是 front（不进主阶梯），但同样要标高性价比 + 贡献数据。
+  // ⚠️ 必须显式 === '1'，不能用真值判断：SVG 的 data-* 进 dataset 全是**字符串**，
+  // data-contributor="0" 读出来是 "0"，而 JS 里 "0" 是 truthy；data-front 更是只在
+  // 阶梯点上出现，其余点 dataset.front 是 undefined，undefined || "0" 照样为真。
+  // 那样写的结果是**每个点**都挂上 🔪 和「贡献数据」。表格侧读的是 JSON 里的真布尔，
+  // 所以只有 tooltip 会错——两边的判定看起来"一样"却不同源。
+  const isFront = m.front === '1';
+  const isContributor = m.contributor === '1';
+  if (isFront || isContributor) tags.push('<span class="tip-effort" style="background:#2f9e44">🔪 高性价比</span>');
+  if (isContributor) tags.push('<span class="tip-effort" style="background:#c98415">贡献数据</span>');
+  // 规格对齐 AA tab：head + 2 行硬数据，一句解释都不要。
+  //   删掉的：智力来源标注（页脚已说明 CC 优先/AA 兜底）、次/$月费（= 次/月÷100，常数缩放）、
+  //          单价 in/out/cache（可从次数反推）、自算对照 + 统一 token 口径（纯 QA，不参与绘图）、
+  //          "AA 兜底 / AA 也有分（未采用）"（智力行已经显示了最终取值）。
+  // peak 孪生点只留一行时间窗，靠模型名的「（peak）」后缀区分，不复述折算逻辑。
+  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span>\${tags.join('')}</span></div>
+    <div class="tip-row">智力: <b>\${m.index}</b> · 官方 <b>\${(+m.req).toLocaleString()}</b> 次/月</div>
+    <div class="tip-row"><b>\${(+m.reqweek).toLocaleString()}</b> 次/周 · <b>\${(+m.req5h).toLocaleString()}</b> 次/5h\${m.tier === 'peak' ? ' · peak ' + m.peakwin : ''}</div>\`;
 });
+
 </script>
 </body>
 </html>`;
@@ -713,3 +880,4 @@ console.log(`deepswe frontier: ${dsFront.size}/${dsRows.length}, zone: ${dsZone.
 console.log(`aa frontier: ${aaFront.size}/${aaRows.length}, zone: ${aaZone.length}, worst: ${aaWorst.model}/$${aaWorst.cost}`);
 console.log(`tb frontier: ${tbFront.size}/${tbRows.length}, zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
 console.log('overlap:', overlap.length ? overlap.map(([d, a]) => `${d} = ${a}`).join('; ') : '(none)');
+if (HAS_PLANS) console.log(`plans frontier: ${plansFront.size}/${plansRows.length} (主图层, Contributor 除外), 高性价比区: ${plansZone.length}, deal layer: ${plansRows.filter((r) => r.contributor).map((r) => r.model).join(', ') || '(none)'}${plansWorst ? `, worst: ${plansWorst.model}/${plansWorst.index}` : ''}`);
