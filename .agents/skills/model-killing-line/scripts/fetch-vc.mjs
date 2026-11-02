@@ -5,6 +5,10 @@
 // 123 行）。两者都是「成本 × 完成度」，所以 X/Y 轴语义可以平移：Avg Cost per task → Cost / Test，
 // PASS@1 → Score。
 //
+// 输出口径：**一行一个模型**。页面原始 123 行里有 3 个模型被不同 harness 重复跑过（见文件中部
+// 的折叠逻辑），harness 不进任何展示面（表格/图/tooltip），所以身份键就是 model。
+// 效率维用页面自带的 Duration / Test（跑完一个任务的时间，越短越好），不自己算 tokens/s。
+//
 // 为什么抓 SSR HTML：页面没有任何公开 JSON API（Next.js SSR 直出 <table>），
 // 表格在 <table aria-labelledby="benchmark-leaderboard-title"> 里，列顺序固定：
 //   Rank | Model(<a href="/models/<org>_<slug>">) | Harness | Score | Cost / Test | Tokens / Test | Duration / Test
@@ -69,8 +73,6 @@ for (const rm of table.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
   const cost = parseCost(cells[4]);
   const tokens = parseTokens(cells[5]);
   const duration_sec = parseDuration(cells[6]);
-  // 效率维：自身 tokens ÷ 自身 duration（不跨榜融合，页面自带真速度）
-  const speed = tokens != null && duration_sec > 0 ? +(tokens / duration_sec).toFixed(0) : null;
   rows.push({
     rank: +stripTags(cells[0]),
     model,
@@ -81,7 +83,6 @@ for (const rm of table.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
     tokens_disp: stripTags(cells[5]),
     duration_sec,
     duration_disp: stripTags(cells[6]),
-    speed,
     org: href ? href.split('_')[0].toLowerCase() : null,
     slug: href ? href.split('_').slice(1).join('_') : null,
     url: href ? `https://www.vals.ai/models/${href}` : null,
@@ -95,9 +96,27 @@ if (rows.length === 0) {
 // 页面顶部的 "Updated 10/29/2026" 文案
 const updated = html.match(/Updated\s+(\d{2}\/\d{2}\/\d{4})/)?.[1] ?? null;
 
-const data = rows.sort((a, b) => b.score - a.score);
+// 一行一个模型：Vals 会把同一模型挂在不同 harness 下重复上榜（Claude Opus 4.8 的
+//   OpenHands / Claude Code、GPT 5.5 的 OpenHands / Factory / Codex），而 115/123 行都是
+//   OpenHands，混着展示只会让同一模型出现三行看起来像 bug。这里折叠成「该模型最好的一次
+//   run」（score 最高，同分取更便宜），页面不展示 harness —— 口径变了要重新想清楚再动。
+const byModel = new Map();
+const merged = [];
+for (const r of rows) {
+  const prev = byModel.get(r.model);
+  if (!prev) {
+    byModel.set(r.model, { ...r, runs: [r.harness] });
+    continue;
+  }
+  prev.runs.push(r.harness);
+  const better = r.score > prev.score || (r.score === prev.score && (r.cost ?? Infinity) < (prev.cost ?? Infinity));
+  if (better) byModel.set(r.model, { ...r, runs: prev.runs });
+}
+const folded = [...byModel.values()].filter((r) => r.runs.length > 1);
+const data = [...byModel.values()].sort((a, b) => b.score - a.score);
 const noCost = data.filter((r) => r.cost == null).length;
 
 writeFileSync(OUT, JSON.stringify(data, null, 1) + '\n');
 console.log(`source: ${URL}  updated: ${updated}  rows: ${data.length} (cost 缺失 ${noCost} 行，只进表格不进图)  → ${OUT}`);
+if (folded.length) console.log('多 harness 折叠（保留最高分 run）:', folded.map((r) => `${r.model}[${r.runs.join('+')}→${r.harness}]`).join(', '));
 console.log('top3:', data.slice(0, 3).map((r) => `${r.model}@$${r.cost}/${r.score}%`).join(', '));

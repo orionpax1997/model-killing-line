@@ -6,9 +6,8 @@
 // 两个 SVG 的 id 分别重写为 chart-code / chart-gen（避免重复 id），
 //   tooltip/表格各绑各的卡片，logo 共用一份 LOGO_MAP。
 //
-// 编码榜身份键 = model + harness（uid），因为同一模型可能被多个 harness 跑过
-//   （Claude Opus 4.8 的 OpenHands / Claude Code、GPT 5.5 的 OpenHands / Factory / Codex），
-//   图上圈 / 表格行 / tooltip 三态都按 uid 判定，不能只按 model。
+// 编码榜身份键 = model（fetch-vc 已把同模型的多 harness run 折叠成最高分那次，
+//   harness 不进任何展示面），图上圈 / 表格行 / tooltip 三态都按 model 判定。
 //
 // 可选：--with-top-missing（或 MKL_INCLUDE_TOP_MISSING=1）会把 OpenRouter Top 20 里
 //   "用了但还没上双榜"的模型嵌进表格：
@@ -54,8 +53,8 @@ if (!HAS_TB) console.log('TBench: tb-data.json/tb-chart.svg 未找到，跳过�
 const HAS_PLANS = existsSync(path.join(DIR, 'plans-data.json')) && existsSync(path.join(DIR, 'plans-chart.svg'));
 if (!HAS_PLANS) console.log('Plans: plans-data.json/plans-chart.svg 未找到，跳过「CommandCode」榜（跑 fetch-plans → render-plans 可启用）');
 
-// 编码榜身份键：同一模型多个 harness 变体各自独立成行（同 TB 的 model+effort+agent 口径）
-const vcUid = (r) => `${r.model}\u0000${r.harness ?? ''}`;
+// 编码榜身份键 = model（一行一个模型；harness 已在 fetch-vc 折叠掉）
+const vcUid = (r) => r.model;
 const vcRows = JSON.parse(readFileSync(path.join(DIR, 'vc-data.json'), 'utf8')).map((r) => ({ ...r, k: vcUid(r) }));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
 const plansData = HAS_PLANS ? JSON.parse(readFileSync(path.join(DIR, 'plans-data.json'), 'utf8')) : null;
@@ -136,10 +135,11 @@ const plansWorst = plansRows
   .filter((r) => !plansFront.has(r.model) && !r.contributor)
   .reduce((a, b) => (a && a.index <= b.index && a.requests_month <= b.requests_month ? a : b), null);
 // 编码榜效率维 = 榜单自带的真速度 tokens ÷ duration（与 render-vc.mjs 同源，不跨榜融合）
-const vcNumSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
+// 效率维 = Duration / Test（秒，越短越高效）；pareto3 第三维按「越大越好」，故取负号
+const vcNumDur = (r) => (r.duration_sec == null ? -Infinity : -r.duration_sec);
 const vcPlotted = vcRows.filter((r) => r.cost != null);
-console.log('vc: cost 缺失（只进表格不进图）=', (vcRows.length - vcPlotted.length), '行:', vcRows.filter((r) => r.cost == null).map((r) => `${r.model}(${r.harness})`).join(', ') || '(none)');
-const vcFast3 = new Set([...pareto3(vcPlotted, (r) => r.cost, (r) => r.score, vcNumSpeed, (r) => r.k)].filter((m) => !vcFront.has(m)));
+console.log('vc: cost 缺失（只进表格不进图）=', (vcRows.length - vcPlotted.length), '行:', vcRows.filter((r) => r.cost == null).map((r) => r.model).join(', ') || '(none)');
+const vcFast3 = new Set([...pareto3(vcPlotted, (r) => r.cost, (r) => r.score, vcNumDur, (r) => r.k)].filter((m) => !vcFront.has(m)));
 const aaFast3 = new Set([...pareto3(aaRows, (r) => r.cost, (r) => r.index, numSpeed)].filter((m) => !aaFront.has(m)));
 const tbFast3 = new Set([...pareto3(tbRows, (r) => r.cost, (r) => r.accuracy, tbNumSpeed, (r) => r.k)].filter((m) => !tbFront.has(m)));
 const pareto2On = (rows, names, costOf, yOf, nameOf = (r) => r.model) => pareto2(rows.filter((r) => names.has(nameOf(r))), costOf, yOf, nameOf);
@@ -382,7 +382,7 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
   <div class="card">
     <h2>编码能力排名（Vibe Code Bench）</h2>
     <table>
-      <thead><tr><th>#</th><th>Model</th><th>Harness</th><th class="num">Score</th><th class="num">Cost/Test</th><th class="num">Tokens/Test</th><th class="num">Duration</th><th class="num">Tokens/s</th></tr></thead>
+      <thead><tr><th>#</th><th>Model</th><th class="num">Score</th><th class="num">Cost/Test</th><th class="num">Tokens/Test</th><th class="num">Duration</th></tr></thead>
       <tbody id="tbody-code"></tbody>
     </table>
   </div>
@@ -498,24 +498,22 @@ const tmCells = (m, numCols) => {
 // ---- 编码能力表格（Vals AI Vibe Code Bench，全部行按 score 降序；cost 缺失的行照常列出，Cost 列显示 —）----
 {
   const tbody = document.getElementById('tbody-code');
-  const trByModel = new Map(); // 用于 unbench 插入"上一代"锚点上方（同名模型多 harness 时取第一行）
+  const trByModel = new Map(); // 用于 unbench 插入"上一代"锚点上方
   const trByCanon = new Map(); // 按 normalizeSlug(OR slug) 也建索引（AA-highlight succ 用 canon key 找锚点）
   [...VC_ROWS].sort((a,b)=>b.score-a.score).forEach((r,i)=>{
     const alive = VC_SURVIVORS.has(r.k);
     const fast = !alive && VC_FAST.has(r.k);
     const tr = document.createElement('tr');
     tr.className = alive ? 'alive' : (fast ? 'fast' : '');
-    if (fast) tr.title = '高效：能力/成本被压制，但 Tokens/s 更高（跑得更快），不是真被斩';
+    if (fast) tr.title = '高效：能力/成本被压制，但 Duration 更短（跑得更快），不是真被斩';
     tr.dataset.url = VC_LINK[r.k];
     tr.tabIndex = 0;
     tr.innerHTML = \`<td>\${i+1}</td>
       <td class="model">\${alive ? '🔪 ' : (fast ? '⚡ ' : '')}\${orA(r.model, VC_LINK[r.k])}\${alive ? ' <span class="tag">高性价比</span>' : (fast ? ' <span class="tag tag-fast">高效</span>' : '')}</td>
-      <td>\${r.harness}</td>
       <td class="num">\${r.score}%</td>
       <td class="num">\${r.cost == null ? '—' : '$' + r.cost.toFixed(2)}</td>
       <td class="num">\${r.tokens_disp || '—'}</td>
-      <td class="num">\${r.duration_disp || '—'}</td>
-      <td class="num">\${r.speed == null ? '—' : r.speed.toLocaleString()}</td>\`;
+      <td class="num">\${r.duration_disp || '—'}</td>\`;
     tbody.appendChild(tr);
     if (!trByModel.has(r.model)) trByModel.set(r.model, tr);
     const canon = normalizeSlug(VC_LINK[r.k].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), ''));
@@ -539,7 +537,7 @@ const tmCells = (m, numCols) => {
         } else {
           tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 Vibe Code Bench 暂缺（推测锚点 ' + s.predecessor.key + ' 不在榜中）';
         }
-        tr.innerHTML = tmCells(s, 8);
+        tr.innerHTML = tmCells(s, 6);
         tbody.appendChild(tr);
         continue;
       }
@@ -552,7 +550,7 @@ const tmCells = (m, numCols) => {
       } else {
         tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 Vibe Code Bench；推测为上一代「' + s.predecessor.key + '」的后续';
       }
-      tr.innerHTML = tmCells(s, 8);
+      tr.innerHTML = tmCells(s, 6);
       tbody.insertBefore(tr, anchor);
     }
     // 2) 纯免费型：按 OR 排名顺序（高位先）插到最顶部
@@ -562,7 +560,7 @@ const tmCells = (m, numCols) => {
       tr.dataset.url = tmUrl(f);
       tr.tabIndex = 0;
       tr.title = 'OR Top ' + f.rank + ' 免费模型（' + fmtWeekly(f.weekly_tokens) + '/周），双榜暂缺';
-      tr.innerHTML = tmCells(f, 8);
+      tr.innerHTML = tmCells(f, 6);
       tbody.insertBefore(tr, tbody.firstChild);
     }
   }
@@ -832,10 +830,10 @@ function bindTip(svgId, cardId, tipId, fmt) {
 const logoImg = (d) => d.logo ? \`<img class="tip-logo" src="\${d.logo}" alt="">\` : '';
 bindTip('chart-code', 'card-code', 'tip-code', (d) => {
   const m = d.el.dataset;
-  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span><span class="tip-effort" style="background:#5b7a3a">\${m.harness}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
+  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
     <div class="tip-row">Vibe Code Score: <b>\${m.score}%</b></div>
     <div class="tip-row">Cost / Test: <b>$\${(+m.cost).toFixed(2)}</b></div>
-    <div class="tip-row">Tokens: <b>\${m.tokens || '—'}</b> · Duration: <b>\${m.dur || '—'}</b> · Speed: <b>\${m.speed ? (+m.speed).toLocaleString() + ' tok/s' : '—'}</b></div>\`;
+    <div class="tip-row">Tokens: <b>\${m.tokens || '—'}</b> · Duration: <b>\${m.dur || '—'}</b></div>\`;
 });
 bindTip('chart-gen', 'card-gen', 'tip-gen', (d) => {
   const m = d.el.dataset;
@@ -882,7 +880,7 @@ if (HAS_TB) bindTip('chart-tb', 'card-tb', 'tip-tb', (d) => {
 
 writeFileSync(OUT, html);
 console.log('index.html bytes:', html.length, '→', OUT);
-console.log(`vc frontier: ${vcFront.size}/${vcPlotted.length} (plotted), zone: ${vcZone.length}, worst: ${vcWorst.model}(${vcWorst.harness})/$${vcWorst.cost}`);
+console.log(`vc frontier: ${vcFront.size}/${vcPlotted.length} (plotted), zone: ${vcZone.length}, worst: ${vcWorst.model}/$${vcWorst.cost}`);
 console.log(`aa frontier: ${aaFront.size}/${aaRows.length}, zone: ${aaZone.length}, worst: ${aaWorst.model}/$${aaWorst.cost}`);
 console.log(`tb frontier: ${tbFront.size}/${tbRows.length}, zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
 console.log('overlap:', overlap.length ? overlap.map(([d, a]) => `${d} = ${a}`).join('; ') : '(none)');

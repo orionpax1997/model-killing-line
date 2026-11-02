@@ -18,15 +18,17 @@ single-page `index.html` with switchable sections (tab 切换，默认通用智�
 - ② 编码能力斩杀线（数据源 Vals AI Vibe Code Bench，tab 文案「编码能力」）:
   X = Cost / Test USD (log axis，跑完一个完整建站任务的成本)，Y = Vibe Code Bench Score (%)，
   efficient zone = Score ≥ 80% & cost ≤ $5。**这张榜取代了原来的 DeepSWE**
-  （DeepSWE 2026-09 之后停止更新，Vibe Code Bench 2026-10-29 仍在跑）。每行 =
-  (模型 × harness) 的官方 run，**123 行全部进表格**；货真价实的身份键是
-  `model + harness`（同一模型可被 OpenHands / Claude Code / Codex / Cursor CLI / …
-  各跑一次，如 Claude Opus 4.8 两行、GPT 5.5 三行）——图上圈/表格徽标/tooltip
-  三态统一按这个 uid 判定。页面没给 Cost 的 7 行（Beam 1.0 / Muse Spark /
-  Grok Build 0.1 / Laguna M.1 / Laguna XS.2 / Nemotron 3 Ultra / SWE-1.6 Fast）
-  没有 X 坐标，只进表格不进图。效率维用榜单自带的真速度 tokens ÷ duration
-  （不跨榜融合，也没有 steps 概念）。前沿大圆半径按最近邻自适应（R = minDist/2 − 2，
-  夹在 [8,18]），因为 DeepSeek 三代挤在 $0.36/$0.41/$0.58 会把固定 R=18 叠成一坨。
+  （DeepSWE 2026-09 之后停止更新，Vibe Code Bench 2026-10-29 仍在跑）。**一行一个模型，
+  119 行全部进表格**：页面原始 123 行里 3 个模型被不同 harness 重复跑过（Claude Opus 4.8
+  的 OpenHands/Claude Code、GPT 5.5 的 OpenHands/Factory/Codex、Claude Sonnet 4.6 的
+  Claude Code/OpenHands），fetch 时折叠成「最高分那次 run」。**harness 不进任何展示面**
+  （115/123 行都是 OpenHands，没有信息量，露出来只会让同一模型出现三行像 bug）——
+  身份键就是 model，图上圈/表格徽标/tooltip 三态按它判定。页面没给 Cost 的 7 行
+  （Beam 1.0 / Muse Spark / Grok Build 0.1 / Laguna M.1 / Laguna XS.2 / Nemotron 3 Ultra /
+  SWE-1.6 Fast）没有 X 坐标，只进表格不进图。**效率维用榜单自带的 Duration / Test**
+  （跑完一个任务要多久，越短越好；tokens÷duration 那种自算速度不用——它会奖励话痨模型，
+  跟"跑得快"不是一回事）。前沿大圆半径按最近邻自适应（R = minDist/2 − 2，夹在 [8,18]），
+  因为 DeepSeek 三代挤在 $0.36/$0.41/$0.58 会把固定 R=18 叠成一坨。
 - ③ 终端智能斩杀线（数据源 TBench, Terminal-Bench 4.0 官方榜, 可选）: X = Cost per Task USD
   (log axis, total_cost_usd ÷ n_trials —— 页面 COST 列是整次 run 总成本，没有平均成本列；
   为使 X 轴与 Vibe Code Bench 的 Cost / Test / AA 的 Cost per Task 跨榜可比，用折算的任务单价，
@@ -94,16 +96,18 @@ see below. The scripts read/write via cwd and need only node stdlib.
 - `fetch-vc.mjs`: GETs https://www.vals.ai/benchmarks/vibe-code 的 SSR HTML，在
   `<table aria-labelledby="benchmark-leaderboard-title">` 里逐 `<tr>` 抓 7 列
   （Rank / Model+详情页 href / Harness / Score / Cost / Test / Tokens / Test / Duration / Test）。
-  每行输出 `{rank, model, harness, score, cost(缺失 null), tokens, tokens_disp,
-  duration_sec, duration_disp, speed(tokens÷duration, 缺失 null), org, slug, url}`。
+  原始行先按 model 折叠（同模型多 harness 只留 score 最高、同分更便宜的那次），
+  每行输出 `{rank, model, harness(仅留档，不展示), runs, score, cost(缺失 null), tokens,
+  tokens_disp, duration_sec, duration_disp, org, slug, url}`。
   org 与 slug 来自详情页路径 `/models/<org>_<slug>`（如 `anthropic_claude-sonnet-5-5`），
   用来拼 OpenRouter 链接，比按名字前缀猜准。Throws when zero rows parse — 页面改版
   （列顺序/表格容器变更）时看文件头的列约定。页面顶部还有 `Updated MM/DD/YYYY` 文案，
   脚本会打印出来（当前 10/29/2026）。
 - `render-vc.mjs`: 结构同 `render-aa.mjs`（自适应 log x 轴、碰撞感知 callout、透明 hit-area、
   `data-*` 驱动 tooltip），但：
-  · 身份键 = `model + harness`（uid），前沿/⚡/表格三态一致；
-  · 效率维 = 榜单自带真速度 `tokens ÷ duration`（不跨榜融合，`data-speed` 直接就是 tok/s）；
+  · 身份键 = model（一行一个模型；harness 在 fetch 阶段已折叠掉，不画不显示）；
+  · 效率维 = `duration_sec`（越短越高效，`pareto3` 的第三维按「越大越好」所以传负值）；
+    输出只有 `data-tokens` / `data-dur`，没有 tok/s 这个字段；
   · 只画 cost 有效的行（7 行无 cost 的只进表格）；
   · **前沿大圆半径自适应**：R = 最近邻距离/2 − 2，夹在 [8,18]（DeepSeek 三代挤在
     $0.36/$0.41/$0.58，固定 R=18 会重叠 50%+ 把一个点完全盖住）。圆仍画在真实坐标上，
@@ -158,14 +162,15 @@ see below. The scripts read/write via cwd and need only node stdlib.
   从 off-peak 拉细连线，Contributor 用橙色虚线大圈 + 两行标注。
 
 三维语义（能力 × 成本 × 效率）：2D 前沿（绿，🔪高性价比）只看能力+成本；
-效率维三张榜各自用自带真速度（Vibe Code Bench = tokens÷duration，AA = 自带 Tokens/s，
+效率维三张榜各自用自家的时间口径（Vibe Code Bench = **Duration / Test**，AA = 自带 Tokens/s，
 TB = run 平均 tok/s），**不再做跟 AA 融合的复合效率**（DeepSWE 的 steps 口径随榜一起下线了）。
 叠加效率后仍无人能全包围的，再在内部按能力×成本取一次次级 2D 前沿
 （不画线只判断）：线上才算高效（蓝，⚡），次级线下
 （被另一个蓝色全包围）降级真被斩。剩下才是真被斩（无色）。
 表格行/图上圈/tooltip/解读全部三态一致；`worst` 只从真被斩里取。
-编码表列：`# / Model / Harness / Score / Cost/Test / Tokens/Test / Duration / Tokens/s`
-（Cost 缺失行显示 —，但仍然列在表里）。跨榜重合用 `normalizeSlug` 作归一键直接比
+编码表列：`# / Model / Score / Cost/Test / Tokens/Test / Duration`
+（Cost 缺失行显示 —，但仍然列在表里；不设 Harness 列，也不设 Tokens/s 列——效率看
+Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨榜重合用 `normalizeSlug` 作归一键直接比
 （不再经过 fuse.mjs）。
 - `openrouter.mjs`: 模型名归一化 + OpenRouter 详情页链接（`normalizeSlug` 去括号
   effort 后缀 → 小写 hyphen slug；`aaLink(model, creator)` 按 AA 的 Creator 列定 org，
@@ -281,10 +286,9 @@ TB = run 平均 tok/s），**不再做跟 AA 融合的复合效率**（DeepSWE �
    `frontier points` / `efficient` / `zone` 名单，解读里的 🔪 / ⚡ / 📊 说法必须与那
    三个名单一致。已踩过的坑：**AA 榜的 2D 前沿与 ⚡ 高效圈交集常常为空**（前沿只看
    能力×成本，⚡ 是 3D 差集），所以"某点在前沿上又套着 ⚡"这种话要先把两个名字
-   都在两份名单里查到才能写；查不到就只写其中一个。同理编码榜的 ⚡ 是**榜单自带
-   tokens÷duration**（不是 AA 的 Tokens/s，也不是「单位成本产出」），拿 AA speed 解释
-   编码榜的 ⚡ 同样会错；另外编码榜的 ⚡ 名单里同一模型可能出现在不同 harness 上，写的时候
-   带上 harness。
+   都在两份名单里查到才能写；查不到就只写其中一个。同理编码榜的 ⚡ 是**榜单自带的
+   Duration / Test 更短**（不是 AA 的 Tokens/s，不是 token 吞吐，也不是「单位成本产出」），
+   拿 AA speed 解释编码榜的 ⚡ 会错：跑得快 ≠ 输出得多，话痨模型 tok/s 高但更慢。
 
 不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
 缺测"说成"不推荐"；用编码榜/TB 的缺测率来评价 AA 上的高 Index 模型；**用编码榜 / TB 的
@@ -369,7 +373,8 @@ TB = run 平均 tok/s），**不再做跟 AA 融合的复合效率**（DeepSWE �
 
 ## Completion criteria
 
-- `fetch-vc.mjs` prints `rows: ~123 (cost 缺失 ~7 行…)` + `updated: MM/DD/YYYY`。
+- `fetch-vc.mjs` prints `rows: ~119 (cost 缺失 ~7 行…)` + `updated: MM/DD/YYYY`，多 harness 折叠
+  只在有折叠时多打一行 `多 harness 折叠（保留最高分 run）: …`（当前 3 个模型）。
   行数或 cost 缺失数的量级变了 = Vals 页面改版（列顺序 / 表格容器），先看文件头
   的列约定再改。`updated` 太久没动说明这个榜也开始停更了，要在解读里说清楚。
 - `fetch-aa.mjs` prints `trs: ~277, kept: ~62`. `kept` drifting means the
@@ -377,10 +382,10 @@ TB = run 平均 tok/s），**不再做跟 AA 融合的复合效率**（DeepSWE �
 - `fetch-tb.mjs` prints `rows: ~35`（Terminal-Bench 4.0）。任何其它数目说明
   leaderboard 形状变了 — 重新检查 RSC payload 解析。
 - `render-vc.mjs` prints frontier points + `labeled:` + `efficient:`；前沿数必须等于
-  Pareto-optimal 行数（按 model+harness 计），`labeled:` 里若出现「未放下 …」说明
+  Pareto-optimal 行数（按 model 计，一行一个模型），`labeled:` 里若出现「未放下 …」说明
   气泡位置不够，圆点仍在（hover 可看名字），可考虑再加大 padT 或补候选位。
 - Hovering any dot in `index.html` shows a card with that dot's lab logo,
-  model name, score, cost and tokens/duration/speed.
+  model name, score, cost and tokens/duration（没有 harness、没有 tok/s）。
 - `logos/` (27 files, ~464KB, designarena `model-logos`, resized to 128px)
   ships with the skill and is inlined at build time; nothing is copied to
   the output dir. Logo mapping lives in `logoFileOf()` in

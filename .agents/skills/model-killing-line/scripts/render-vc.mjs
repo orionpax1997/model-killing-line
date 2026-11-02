@@ -7,10 +7,10 @@
 // 与 render-aa.mjs 同构：logo 徽章内联 data URI、前沿大圆 + 碰撞感知 callout、透明
 // hit-area、自定义 tooltip 靠 data-* 属性（gen-html.mjs 绑定）、x/y 轴自适应。
 // 与旧 render.mjs（DeepSWE）的区别：
-//   - 身份键 = model + harness（同一模型可能被多个 harness 跑过，如 Claude Opus 4.8 的
-//     OpenHands / Claude Code 两行、GPT 5.5 的 OpenHands / Factory / Codex 三行），
-//     图上/表格/tooltip 三态统一用 uid 判定，不能只按 model；
-//   - 效率维用榜单自带的真速度 tokens ÷ duration（不跨榜融合，无同名也不吃亏）；
+//   - 一行一个模型：fetch-vc 已把同模型的多 harness run 折叠成最高分那次，所以身份键
+//     就是 model（harness 不进任何展示面——115/119 行都是 OpenHands，没有信息量）；
+//   - 效率维用榜单自带的 Duration / Test（跑完一个任务要多久，越短越好），不用
+//     tokens ÷ duration 那种自算速度；也不跨榜融合；
 //   - cost 缺失（页面 '-')的行不画（没有 X 坐标），只在表格里出现。
 //
 // 用法: node scripts/render-vc.mjs [--dir <dir>] [--in <vc-data.json>] [--out <vc-chart.svg>]
@@ -35,8 +35,8 @@ const allRows = JSON.parse(readFileSync(IN, 'utf8'));
 const rows = allRows.filter((r) => r.cost != null && r.cost > 0);
 const dropped = allRows.length - rows.length;
 
-// 身份键：同一模型被多个 harness 跑过 = 多行，各自独立参与 Pareto/高效判定
-const uid = (r) => `${r.model}\u0000${r.harness ?? ''}`;
+// 身份键 = model（fetch-vc 已按模型折叠，一行一个模型）
+const uid = (r) => r.model;
 
 rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
 const logoInfoOf = (m) => {
@@ -45,7 +45,8 @@ const logoInfoOf = (m) => {
 };
 
 // 帕累托前沿（2D：cost 升序 score 创新高，决定连线/大圆）
-const numSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
+// 效率维 = Duration（秒，越短越高效）。pareto3 的第三维是「越大越好」，取负号。
+const effOf = (r) => (r.duration_sec == null ? -Infinity : -r.duration_sec);
 const byCost = [...rows].sort((a, b) => a.cost - b.cost);
 const frontier = [];
 let best = -Infinity;
@@ -53,11 +54,11 @@ for (const r of byCost) {
   if (r.score > best) { best = r.score; frontier.push({ ...r }); }
 }
 const frontIds = new Set(frontier.map(uid));
-// fast 集：3D 差集（cost↓ score↑ speed↑）再在内部按 score×cost 取次级 2D 前沿 → 高效（蓝圈）；
+// fast 集：3D 差集（cost↓ score↑ duration↓）再在内部按 score×cost 取次级 2D 前沿 → 高效（蓝圈）；
 //   次级线下（被另一个蓝色在 score+cost 上全包围）的降级为真被斩，不标蓝
 const fastIds3 = new Set(rows.filter((r) => !frontIds.has(uid(r)) && !rows.some((o) =>
-  o !== r && o.cost <= r.cost && o.score >= r.score && numSpeed(o) >= numSpeed(r) &&
-  (o.cost < r.cost || o.score > r.score || numSpeed(o) > numSpeed(r))
+  o !== r && o.cost <= r.cost && o.score >= r.score && effOf(o) >= effOf(r) &&
+  (o.cost < r.cost || o.score > r.score || effOf(o) > effOf(r))
 )).map(uid));
 const fastIds = new Set();
 {
@@ -149,7 +150,7 @@ const connectorPath = 'M' + frontier.map(f => `${X(f.cost).toFixed(1)},${Y(f.sco
 s += `<path d="${connectorPath}" fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="5,4"/>`;
 
 const dataAttrs = (r, isFast, info) =>
-  `data-model="${esc(r.model)}" data-harness="${esc(r.harness ?? '')}" data-score="${r.score}" data-cost="${r.cost}" data-tokens="${esc(r.tokens_disp ?? '—')}" data-dur="${esc(r.duration_disp ?? '—')}" data-speed="${r.speed ?? ''}"${isFast ? ' data-fast="1"' : ''}${info ? ` data-logo="${info.file}"` : ''}`;
+  `data-model="${esc(r.model)}" data-score="${r.score}" data-cost="${r.cost}" data-tokens="${esc(r.tokens_disp ?? '—')}" data-dur="${esc(r.duration_disp ?? '—')}"${isFast ? ' data-fast="1"' : ''}${info ? ` data-logo="${info.file}"` : ''}`;
 
 // 非前沿点（123 行里绝大多数在这里，logo 徽章缩到 R=7 以免左端低成本的密集区糊成一团）
 for (const r of rows) {
@@ -170,7 +171,7 @@ for (const r of rows) {
   s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10" fill="transparent" ${attrs} class="dot-hit"/>`;
 }
 
-// 同基名（同一模型多 harness 变体）在前沿上只标一个 label，锚定 score 最高的那行
+// 前沿上每个模型只标一个 label
 const baseName = (m) => m.replace(/\s*\(.*?\)\s*/g, '').trim();
 const labeledFlags = frontier.map((f, i) =>
   i === frontier.length - 1 || baseName(frontier[i + 1].model) !== baseName(f.model));
@@ -305,6 +306,6 @@ writeFileSync(OUT, s);
 console.log('vc-chart.svg bytes:', s.length, '→', OUT);
 console.log(`plotted: ${rows.length}/${allRows.length}（cost 缺失 ${dropped} 行只进表格）`);
 console.log('efficient zone rect: x=', padL, '→', zoneX.toFixed(1), ', y=', padT, '→', zoneY.toFixed(1));
-console.log('frontier points:', frontier.map(f => `${f.model}(${f.harness})@$${f.cost}/${f.score}%`).join(', '));
+console.log('frontier points:', frontier.map(f => `${f.model}@$${f.cost}/${f.score}%/${f.duration_disp}`).join(', '));
 console.log('labeled:', placedLabels.join(', '), placedLabels.length < frontier.length ? `（未放下 ${frontier.filter((f) => !placedLabels.includes(f.model)).map((f) => f.model).join(', ')}，圆点仍在，hover 看名字）` : '');
-console.log('efficient:', rows.filter((r) => fastIds.has(uid(r))).map((r) => `${r.model}(${r.harness})`).join(', ') || '(none)');
+console.log('efficient:', rows.filter((r) => fastIds.has(uid(r))).map((r) => `${r.model}/${r.duration_disp}`).join(', ') || '(none)');
