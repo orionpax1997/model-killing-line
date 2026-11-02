@@ -1,14 +1,14 @@
 // find-top-missing.mjs — 从 OR Top Weekly 里挑出"用了但没 benchmark"的模型
 //
-// 输入：or-data.json（fetch-openrouter）、data.json（DS）、aa-data.json（AA）
+// 输入：or-data.json（fetch-openrouter）、vc-data.json（Vals AI Vibe Code Bench）、aa-data.json（AA）
 // 输出：top-missing.json
 //
 // 三类：
-//   - successors[] — 没 benchmark，但能找到一个 DS/AA 上的"上一代"作为锚点
+//   - successors[] — 没 benchmark，但能找到一个 VC/AA 上的"上一代"作为锚点
 //     （黄色放到上一行的位置）。strip 启发式剥常见后缀（contributor/flash/
 //     preview/free/exp/vision/lite/...）、日期尾巴、嵌入的 .N 小版本，
 //     找不到再尝试末位 -1 一代。例：muse-spark-1.3-contributor → muse-spark-1.3
-//     在 AA 命中；deepseek-v4-flash-0423 → 深 v4-flash 在 DS 命中；
+//     在 AA 命中；deepseek-v4-flash-0423 → 深 v4-flash 在 VC 命中；
 //     hy4-preview → 剥 preview 后再末位 -1 → hy3 在 AA 命中。
 //   - free[] — 没 benchmark 且 $0/$$0 的（青色放到表格最顶部）。AA 有同名付费版
 //     （如 Nemotron 3 Ultra）的归"上一代"成功，所以不会落到 free 桶。
@@ -19,7 +19,7 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeSlug, dsLink, aaLink, tbLink } from './openrouter.mjs';
+import { normalizeSlug, vcLink, aaLink, tbLink } from './openrouter.mjs';
 
 const DIR = process.env.MKL_DIR ?? path.join(os.tmpdir(), 'model-killing-line');
 mkdirSync(DIR, { recursive: true });
@@ -34,9 +34,9 @@ const OUT = (() => {
 })();
 
 const orRows = JSON.parse(readFileSync(path.join(DIR, 'or-data.json'), 'utf8'));
-const dsRows = JSON.parse(readFileSync(path.join(DIR, 'data.json'), 'utf8'));
+const vcRows = JSON.parse(readFileSync(path.join(DIR, 'vc-data.json'), 'utf8'));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
-// TBench 3.0 独立成榜，可选：缺失时跳过 TB 维度（仅输出 DS/AA successors/free）。
+// TBench 3.0 独立成榜，可选：缺失时跳过 TB 维度（仅输出 VC/AA successors/free）。
 const tbRows = existsSync(path.join(DIR, 'tb-data.json'))
   ? JSON.parse(readFileSync(path.join(DIR, 'tb-data.json'), 'utf8'))
   : [];
@@ -44,8 +44,8 @@ const tbRows = existsSync(path.join(DIR, 'tb-data.json'))
 // AA 高性价比 / 高效 集合（复用 render-aa.mjs 的 2D+3D 前沿逻辑）。
 // 计算结果示例：frontNames = ['GPT-5.6 Luna (max)', 'GLM-5.3-Flash', 'GPT-6 Astra (xhigh)', ...]
 //              fastNames  = ['Ling 3.0 Flash', 'DeepSeek V4 Flash 0731 (max)', 'Muse Spark 1.3 (max)', ...]
-// 这两集合中的模型，AA 表里都标了绿圈/蓝圈。DS 表如果缺这些（但 OR 里有），要作为 DS successor
-// （board='ds'，锚点就是 AA 这个 model name）插到 DS 表里，让用户意识到"AA 已有但 DS 还没上"。
+// 这两集合中的模型，AA 表里都标了绿圈/蓝圈。编码榜如果缺这些（但 OR 里有），要作为 VC successor
+// （board='vc'，锚点就是 AA 这个 model name）插到编码表里，让用户意识到"AA 已有但编码榜还没上"。
 const aaByCost = [...aaRows].sort((a, b) => a.cost - b.cost);
 let aaBest = -Infinity;
 const aaFront = [];
@@ -65,27 +65,27 @@ const aaFastNames = new Set();
     if (r.index > b2) { b2 = r.index; aaFastNames.add(r.model); }
   }
 }
-// AA 已 highlight 的 model name 集合（高性价比 + 高效），归一化后查 DS 是否缺。
+// AA 已 highlight 的 model name 集合（高性价比 + 高效），归一化后查 VC 是否缺。
 const aaHighlightedCanon = new Set();
 for (const m of [...aaFrontNames, ...aaFastNames]) aaHighlightedCanon.add(normalizeSlug(m));
 
-// AA highlight 中 DS 完全没出现的 entry—— 这些要在 DS 表里加一条「待更新」行，
-// 表明"AA 认为这是个不错的模型，但 DS 还没度量过它"。不依赖 OR Top 是否有这个模型（OR 上
+// AA highlight 中 VC 完全没出现的 entry—— 这些要在编码表里加一条「待更新」行，
+// 表明"AA 认为这是个不错的模型，但编码榜还没度量过它"。不依赖 OR Top 是否有这个模型（OR 上
 // Claude Fable 5.1 不在 Top 30，但 AA highlight 是独立信号）。
 //
 // 去重规则（canonical base 去变体）：同一个 model 的多个 effort 变体只留一条
 // —— 同一 canon 只保留一个 AA display name（优先 sort 后 cost 更低的）。
 // 例：`Muse Spark 1.3 (xhigh)` / `Muse Spark 1.3 (max)` 都在 AA 前沿进而只留一个。
-const aaHighlightedMissingOnDs = [];
-const dsCanonSet = new Set(dsRows.map((r) => normalizeSlug(dsLink(r.model).slug)));
+const aaHighlightedMissingOnVc = [];
+const vcCanonSet = new Set(vcRows.map((r) => normalizeSlug(vcLink(r.model, r.org).slug)));
 const seenCanon = new Set();
 for (const m of [...aaFrontNames, ...aaFastNames].sort()) {
   const canon = normalizeSlug(m);
-  if (dsCanonSet.has(canon) || seenCanon.has(canon)) continue;
+  if (vcCanonSet.has(canon) || seenCanon.has(canon)) continue;
   seenCanon.add(canon);
   // 同一个 canon 如果带括号 effort 后缀就不要多个变体：只挑一个显示名（sort 后
   // 第一个，即 effort 名最小的，xhigh < max 所以 xhigh 优先）。
-  aaHighlightedMissingOnDs.push({ model: m, canon, fast: aaFastNames.has(m), front: aaFrontNames.has(m) });
+  aaHighlightedMissingOnVc.push({ model: m, canon, fast: aaFastNames.has(m), front: aaFrontNames.has(m) });
 }
 
 // 归一化键 → "上一代"模型定位。
@@ -97,32 +97,27 @@ for (const m of [...aaFrontNames, ...aaFastNames].sort()) {
 // normalizeSlug(short_name)——后者会把 `0423` 误当成"上一代/下一代"版本号，造
 // 成同一模型的多个别名被当几个不同模型处理。
 //
-// DS 已经是小写 slug，但部分 DS 名跟 OR 实际 slug 不一致（例：DS `deepseek-v4-flash`
-// 实际指向 OR 的 `deepseek-v4-flash-0731`），统一进 `dsSlugAliases` 展开成 alias
-// 集合后再匹配。AA 用 display name 归一化（剥 `(max)` 等 effort 后缀），同名多
-// effort 时按 index 降序保留最显眼的一个当锚点（tooltip/表格里指向它）。
-const dsBySlug = new Map(dsRows.map((r) => [r.model, r]));
+// Vibe Code Bench 的模型名是品牌全名（`Claude Sonnet 5.5`），归一化后与 AA 的 canon 基本同键；
+// 少数与 OR 实际 slug 有出入的（`Mistral Large 4` → `mistral-large-4-0`）由 openrouter.mjs 的
+// SLUG_OVERRIDE 兜住，统一进 `vcSlugAliases` 展开成 alias 集合后再匹配。AA 用 display name
+// 归一化（剥 `(max)` 等 effort 后缀），同名多 effort 时按 index 降序保留最显眼的一个当锚点。
 const aaByCanon = new Map();
 for (const r of aaRows) {
   const k = normalizeSlug(r.model);
   const cur = aaByCanon.get(k);
   if (!cur || r.index > cur.index) aaByCanon.set(k, r);
 }
-// DS 显示名 → 它实际可能的 OR slug 集合（用 dsLink 出来的 finalSlug 作为 alias）。
-const dsSlugAliases = (model) => {
-  const finalSlug = dsLink(model).slug;
-  return new Set([model, finalSlug]);
+// VC 显示名 → 它实际可能的 OR slug 集合（用 vcLink 出来的 finalSlug 作为 alias）。
+const vcSlugAliases = (model, org) => {
+  const finalSlug = vcLink(model, org).slug;
+  return new Set([normalizeSlug(model), finalSlug]);
 };
-const dsHas = (slug) => {
-  for (const r of dsRows) if (dsSlugAliases(r.model).has(slug)) return true;
+const vcHas = (slug) => {
+  for (const r of vcRows) if (vcSlugAliases(r.model, r.org).has(slug)) return true;
   return false;
 };
 // findPredecessor 中间选 cand 时也要按 alias 集判断（这样 hy4 末位 -1 后能在 AA
-// 里找到 DeepSeek V4 Pro 那种 DS alias 是 deepseek-v4-pro-0813 的 row）。
-const dsFind = (slug) => {
-  for (const r of dsRows) if (dsSlugAliases(r.model).has(slug)) return r;
-  return null;
-};
+// 里找到 DeepSeek V4 Pro 那种 VC alias 是 deepseek-v4-pro-0813 的 row）。
 const aaFind = (slug) => aaByCanon.get(slug) ?? null;
 // TBench 同理：按 canon key 查表，返回首个匹配 row（可能有多个 effort/agent 变体）。
 const tbByCanon = new Map();
@@ -190,16 +185,16 @@ const anscestorCandidates = (slug) => {
 };
 
 const findPredecessor = (slug, onlyBoard) => {
-  // onlyBoard 限定只在某 board 上找 predecessor（避免 DS/AA/TB 互相干扰）。
-  // 不传则按 DS 优先、AA 次之、TB 末尾的原顺序。
+  // onlyBoard 限定只在某 board 上找 predecessor（避免 VC/AA/TB 互相干扰）。
+  // 不传则按 VC 优先、AA 次之、TB 末尾的原顺序。
   for (const cand of anscestorCandidates(slug)) {
     if (cand === slug) continue;
-    if (onlyBoard !== 'aa' && onlyBoard !== 'tb' && dsHas(cand)) return { board: 'ds', key: cand };
-    if (onlyBoard !== 'ds' && onlyBoard !== 'tb') {
+    if (onlyBoard !== 'aa' && onlyBoard !== 'tb' && vcHas(cand)) return { board: 'vc', key: cand };
+    if (onlyBoard !== 'vc' && onlyBoard !== 'tb') {
       const aa = aaFind(cand);
       if (aa) return { board: 'aa', key: aa.model };
     }
-    if (onlyBoard !== 'ds' && onlyBoard !== 'aa') {
+    if (onlyBoard !== 'vc' && onlyBoard !== 'aa') {
       const tb = tbFind(cand);
       if (tb) return { board: 'tb', key: tb.model };
     }
@@ -208,20 +203,20 @@ const findPredecessor = (slug, onlyBoard) => {
 };
 
 // 双榜分开判断：
-//   - OR slug 同时命中 DS + AA：两榜都已 benchmark → 跳过
-//   - OR slug 只命中 DS：DS 已 benchmark，但 AA 还代上 → 作为 AA successor 挂 AA 表
+//   - OR slug 同时命中 VC + AA：两榜都已 benchmark → 跳过
+//   - OR slug 只命中 VC：VC 已 benchmark，但 AA 还没上 → 作为 AA successor 挂 AA 表
 //     （strip 出能命中 AA 的候选作为锚点）
-//   - OR slug 只命中 AA：AA 已 benchmark，但 DS 还代上 → 作为 DS successor 挂 DS 表
+//   - OR slug 只命中 AA：AA 已 benchmark，但 VC 还没上 → 作为 VC successor 挂编码表
 //   - 双榜都没直接命中：走 strip 启发式找 predecessor，命中任意 board 就作为该 board 的 successor
 //   - 还找不到：is_free → free 桶；否则 skipped
-// 这样 DeepSeek V4.1 Flash（slug=deepseek-v4.1-flash，AA 有 (max) 变体，DS 没这个 slug）会作为
-// DS successor（锚点 deepseek-v4-flash）出现在 DS 表里；同时不会被误标为 AA 未 benchmark。
+// 这样 DeepSeek V4.1 Flash（slug=deepseek-v4.1-flash，AA 有 (max) 变体，编码榜没这个 slug）会作为
+// VC successor（锚点 deepseek-v4-flash）出现在编码表里；同时不会被误标为 AA 未 benchmark。
 const successors = [];
 const free = [];
 const skipped = [];
 const seen = new Set();
 // 同一 canon 模型的 OR-driven successor 只留一条（去变体）；按 board 分桶避免跨榜冲突。
-const seenBoardCanons = { ds: new Set(), aa: new Set(), tb: new Set() };
+const seenBoardCanons = { vc: new Set(), aa: new Set(), tb: new Set() };
 const markDedup = (board, canon) => {
   if (seenBoardCanons[board].has(canon)) return false;
   seenBoardCanons[board].add(canon);
@@ -231,15 +226,15 @@ for (const r of orRows.slice(0, topArg)) {
   const k = r.slug; // OR 自己的规范 slug（详情页路径），多个 short_name 别名指向同一 slug = 同一模型
   if (seen.has(k)) continue;
   seen.add(k);
-  const dsDirect = dsHas(k);
+  const vcDirect = vcHas(k);
   const aaDirect = !!aaFind(k);
   const tbDirect = tbHas(k);
-  if (dsDirect && aaDirect && tbDirect) continue; // 三榜都已 benchmark
+  if (vcDirect && aaDirect && tbDirect) continue; // 三榜都已 benchmark
   let pred = null;
-  if (dsDirect && aaDirect && !tbDirect) pred = findPredecessor(k, 'tb'); // TB 落后
-  else if (dsDirect && !aaDirect) pred = findPredecessor(k, 'aa'); // AA 落后
-  else if (aaDirect && !dsDirect) pred = findPredecessor(k, 'ds'); // DS 落后
-  else if (tbDirect && !dsDirect) pred = findPredecessor(k, 'ds'); // DS 落后
+  if (vcDirect && aaDirect && !tbDirect) pred = findPredecessor(k, 'tb'); // TB 落后
+  else if (vcDirect && !aaDirect) pred = findPredecessor(k, 'aa'); // AA 落后
+  else if (aaDirect && !vcDirect) pred = findPredecessor(k, 'vc'); // 编码榜落后
+  else if (tbDirect && !vcDirect) pred = findPredecessor(k, 'vc'); // 编码榜落后
   else if (tbDirect && !aaDirect) pred = findPredecessor(k, 'aa'); // AA 落后
   else pred = findPredecessor(k); // 多榜都没直接命中
   const entry = {
@@ -266,15 +261,15 @@ for (const r of orRows.slice(0, topArg)) {
   }
 }
 
-// AA highlight missing from DS or TB (regardless of OR presence):
+// AA highlight missing from VC or TB (regardless of OR presence):
 // Reuse `successors` structure but with via='aa-highlight-no-or' so gen-html can
 // render the AA display name directly (not the OR short_name).
 // Use the AA row's own creator → OR org mapping (aaLink) to get a real detail URL.
-const hlHm = []; // { board: 'ds'|'tb', entry, ... }
+const hlHm = []; // { board: 'vc'|'tb', entry, ... }
 // 对每个 AA-highlight AA canon，产出三个 board 中缺失者：每 canon + 每 board 只留一条
 // （OR-driven successor 优先，这里是补齐 OR 独立的）。
 // OR-driven successor 已报过的 canon+board 这里跳过（例：`DeepSeek V4.1 Flash (max)`
-// 与 OR-driven `DeepSeek V4.1 Flash` 同属 deepseek-v4.1-flash → DS 只留 OR 那条）。
+// 与 OR-driven `DeepSeek V4.1 Flash` 同属 deepseek-v4.1-flash → 编码榜只留 OR 那条）。
 const buildHlEntry = (a, board) => {
   const orMatch = orRows.find((r) => normalizeSlug(r.short_name) === a.canon);
   const aaRow = aaRows.find((r) => normalizeSlug(r.model) === a.canon && (a.fast ? r.model === a.model : true));
@@ -300,11 +295,11 @@ const buildHlEntry = (a, board) => {
     predecessor: { board, key: anchor ? anchor.key : a.canon, via: 'aa-highlight-no-or', kind: a.fast ? 'fast' : 'front' },
   };
 };
-for (const board of ['ds', 'tb']) {
+for (const board of ['vc', 'tb']) {
   if (board === 'tb' && tbRows.length === 0) continue;
-  for (const a of aaHighlightedMissingOnDs) {
+  for (const a of aaHighlightedMissingOnVc) {
     // AA highlight 中这条 AA canon 在该 board 是否缺失（已在 successor 中报过的也跳过）
-    if (board === 'ds' && dsCanonSet.has(a.canon)) continue;
+    if (board === 'vc' && vcCanonSet.has(a.canon)) continue;
     if (board === 'tb' && tbHas(a.canon)) continue;
     if (seenBoardCanons[board].has(a.canon)) continue;
     seenBoardCanons[board].add(a.canon);
@@ -313,8 +308,8 @@ for (const board of ['ds', 'tb']) {
 }
 const allSuccessors = [...successors, ...hlHm];
 
-// Extra pass: AA high-cost-effective / high-efficiency but DS missing + OR is used.
-// Inserted as DS successor (yellow), anchored on the AA model name.
+// Extra pass: AA high-cost-effective / high-efficiency but VC missing + OR is used.
+// Inserted as VC successor (yellow), anchored on the AA model name.
 //
 // Match rule (strict): the OR model must be the SAME underlying model as an AA
 // highlight entry (just different effort/variant), NOT a different version with a
@@ -349,10 +344,10 @@ const seenSucc = new Set(successors.map((s) => s.or_key));
 for (const r of orRows.slice(0, topArg)) {
   const k = r.slug;
   if (seenSucc.has(k)) continue;
-  // DS already has this OR model under some alias (e.g. via dsLink override).
-  const dsDirect = dsHas(k);
+  // VC already has this OR model under some alias (e.g. via vcLink override).
+  const vcDirect = vcHas(k);
   const tbDirect = tbHas(k);
-  if (dsDirect && tbDirect) continue;
+  if (vcDirect && tbDirect) continue;
   const orCanon = normalizeSlug(r.short_name);
   // Direct hit (most common: OR short_name like `Claude Fable 5.1 (xhigh)`
   // normalizes to `claude-fable-5.1` which equals AA highlight canon).
@@ -377,15 +372,15 @@ for (const r of orRows.slice(0, topArg)) {
     context_length: r.context_length,
     is_free: r.is_free,
   };
-  // DS 落后但 TB 不缺 → 只补 DS
-  if (!dsDirect && aaHit) {
-    if (markDedup('ds', normalizeSlug(r.short_name))) {
-      successors.push({ ...orEntry, predecessor: { board: 'ds', key: aaHit, via: 'aa-highlight' } });
-      console.log(`  🆕 (AA high) ${r.short_name} -> ds:missing  (precursor AA: ${aaHit})`);
+  // VC 落后但 TB 不缺 → 只补 VC
+  if (!vcDirect && aaHit) {
+    if (markDedup('vc', normalizeSlug(r.short_name))) {
+      successors.push({ ...orEntry, predecessor: { board: 'vc', key: aaHit, via: 'aa-highlight' } });
+      console.log(`  🆕 (AA high) ${r.short_name} -> vc:missing  (precursor AA: ${aaHit})`);
     }
   }
-  // TB 落后（不管 DS 是不是也有）：如果 TB 有 AA highlight canon 当锚点也补 TB。
-  // 注意 dsSlugAliases 跟 TB 没什么关系，这里直接复用 aaHit。
+  // TB 落后（不管编码榜是不是也有）：如果 TB 有 AA highlight canon 当锚点也补 TB。
+  // 注意 vcSlugAliases 跟 TB 没什么关系，这里直接复用 aaHit。
   if (!tbDirect && aaHit) {
     if (markDedup('tb', normalizeSlug(r.short_name))) {
       successors.push({ ...orEntry, predecessor: { board: 'tb', key: aaHit, via: 'aa-highlight' } });

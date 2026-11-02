@@ -28,7 +28,11 @@ export const logoFileOf = (m) => {
   if (s.startsWith('muse')) return 'metalogo.png';
   if (s.startsWith('mimo-')) return 'xiaomi-logo.png';
   if (s.startsWith('minimax')) return 'minimax.png';
-  if (s.startsWith('hy3') || s.startsWith('tencent-hy')) return 'tencent.png';
+  if (s.startsWith('hy3') || s.startsWith('tencent-hy') || /^hy\d/.test(s)) return 'tencent.png';
+  if (s.startsWith('mistral')) return 'mistrallogo.png';
+  if (s.startsWith('mercury')) return 'inception.png';
+  // Vals AI 榜把 Meta 的 Muse Wonder 写成 `Wonder` / `Wonder Full`
+  if (s.startsWith('wonder')) return 'metalogo.png';
   if (s.startsWith('inkling')) return 'thinkingmachines-logo.png';
   if (s.startsWith('nemotron')) return 'nvidialogo.png';
   if (s.startsWith('step')) return 'stepfun.png';

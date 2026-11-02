@@ -1,26 +1,30 @@
-// gen-html.mjs — 把 DeepSWE + Artificial Analysis 两套图表/表格组装成单文件 index.html
+// gen-html.mjs — 把 Vibe Code Bench（编码能力）+ Artificial Analysis 两套图表/表格组装成单文件 index.html
 //
-// 页面结构：AA 图表 + AA 表格 ｜ DeepSWE 图表 + DeepSWE 表格（各自独立，AA 在上），
-//   最后只有一块联合解读：脚本只留 <div id="llm-obs"> 占位，文案由 LLM 用 --obs 注入（不自动生成）。
+// 页面结构：AA 图表 + AA 表格 ｜ 编码能力（Vals AI Vibe Code Bench）图表 + 表格
+//   （各自独立，AA 在上），最后只有一块联合解读：脚本只留 <div id="llm-obs"> 占位，
+//   文案由 LLM 用 --obs 注入（不自动生成）。
 // 两个 SVG 的 id 分别重写为 chart-code / chart-gen（避免重复 id），
 //   tooltip/表格各绑各的卡片，logo 共用一份 LOGO_MAP。
+//
+// 编码榜身份键 = model + harness（uid），因为同一模型可能被多个 harness 跑过
+//   （Claude Opus 4.8 的 OpenHands / Claude Code、GPT 5.5 的 OpenHands / Factory / Codex），
+//   图上圈 / 表格行 / tooltip 三态都按 uid 判定，不能只按 model。
 //
 // 可选：--with-top-missing（或 MKL_INCLUDE_TOP_MISSING=1）会把 OpenRouter Top 20 里
 //   "用了但还没上双榜"的模型嵌进表格：
 //   - 「上一代」型（hy4-preview / deepseek-v4-flash-0423 / muse-spark-1.3-contributor / ...）：
-//     黄色（🆕 待更新）行，挂在 DS/AA 上对应锚点行的正上方；
+//     黄色（🆕 待更新）行，挂在 VC/AA 上对应锚点行的正上方；
 //   - 纯免费型（Laguna S 2.1 (free) 等）：青色（🆓 免费）行，放两张表的最顶部。
 //   需要 top-missing.json（find-top-missing.mjs 生成）。
 //
 // 用法: node scripts/gen-html.mjs [--dir <dir>] [--out <index.html>] [--with-top-missing] [--obs <html文件|->]
 //   默认读写系统临时目录: os.tmpdir()/model-killing-line/（可用 MKL_DIR 环境变量覆盖目录）
-//   依赖 data.json + chart.svg（fetch/render）与 aa-data.json + aa-chart.svg（fetch-aa/render-aa）都已生成。
+//   依赖 vc-data.json + vc-chart.svg（fetch-vc/render-vc）与 aa-data.json + aa-chart.svg（fetch-aa/render-aa）都已生成。
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { logoFileOf, logoFileOfRow, logoUriOf } from './logos.mjs';
-import { aaLink, dsLink, tbLink, normalizeSlug } from './openrouter.mjs';
-import { buildAaIndex, fusedEff, fusedSpeed, canonKey } from './fuse.mjs';
+import { aaLink, dsLink, vcLink, tbLink, normalizeSlug } from './openrouter.mjs';
 
 const argv = (flag) => {
   const i = process.argv.indexOf(flag);
@@ -37,9 +41,9 @@ const OBS = (() => {
   return v === '-' ? readFileSync(0, 'utf8') : readFileSync(v, 'utf8');
 })();
 
-for (const f of ['data.json', 'chart.svg', 'aa-data.json', 'aa-chart.svg']) {
+for (const f of ['vc-data.json', 'vc-chart.svg', 'aa-data.json', 'aa-chart.svg']) {
   if (!existsSync(path.join(DIR, f))) {
-    console.error(`missing ${path.join(DIR, f)} — 先跑 fetch → fetch-aa → render → render-aa`);
+    console.error(`missing ${path.join(DIR, f)} — 先跑 fetch-vc → fetch-aa → render-vc → render-aa`);
     process.exit(1);
   }
 }
@@ -50,7 +54,9 @@ if (!HAS_TB) console.log('TBench: tb-data.json/tb-chart.svg 未找到，跳过�
 const HAS_PLANS = existsSync(path.join(DIR, 'plans-data.json')) && existsSync(path.join(DIR, 'plans-chart.svg'));
 if (!HAS_PLANS) console.log('Plans: plans-data.json/plans-chart.svg 未找到，跳过「CommandCode」榜（跑 fetch-plans → render-plans 可启用）');
 
-const dsRows = JSON.parse(readFileSync(path.join(DIR, 'data.json'), 'utf8'));
+// 编码榜身份键：同一模型多个 harness 变体各自独立成行（同 TB 的 model+effort+agent 口径）
+const vcUid = (r) => `${r.model}\u0000${r.harness ?? ''}`;
+const vcRows = JSON.parse(readFileSync(path.join(DIR, 'vc-data.json'), 'utf8')).map((r) => ({ ...r, k: vcUid(r) }));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
 const plansData = HAS_PLANS ? JSON.parse(readFileSync(path.join(DIR, 'plans-data.json'), 'utf8')) : null;
 const plansRows = plansData?.rows ?? [];
@@ -81,7 +87,7 @@ const pareto3 = (rows, costOf, yOf, speedOf, nameOf = (r) => r.model) => {
   }
   return names;
 };
-const dsFront = pareto2(dsRows, (r) => r.avg_cost, (r) => r.pass_rate);
+const vcFront = pareto2(vcRows.filter((r) => r.cost != null), (r) => r.cost, (r) => r.score, (r) => r.k);
 const aaFront = pareto2(aaRows, (r) => r.cost, (r) => r.index);
 // TBench 独立成榜（不与 DS/AA 归一化融合）：能力=Accuracy，成本=Cost/Task，效率=Run 平均 tok/s。
 // TB 同一模型在同榜有多个 effort 变体（各自独立成行），所以判定维度用 uid = model+effort+agent，
@@ -129,66 +135,65 @@ const plansZone = plansRows.filter((r) => r.index >= 35 && r.requests_month >= 1
 const plansWorst = plansRows
   .filter((r) => !plansFront.has(r.model) && !r.contributor)
   .reduce((a, b) => (a && a.index <= b.index && a.requests_month <= b.requests_month ? a : b), null);
-// DS 效率维 = 复合效率 E = AA 融合 Tokens/s ÷ DS 自身 Steps（同名优先同 effort，无同名/无 steps → -Inf）——见 fuse.mjs
-const aaIndex = buildAaIndex(aaRows);
-const dsFused = new Map(dsRows.map((r) => [r.model, fusedSpeed(r, aaIndex)]));
-const dsEffNum = (r) => fusedEff(r, aaIndex).num;
-console.log('fused speed: DS miss(AA无同名) =', dsRows.filter((r) => dsFused.get(r.model).kind === 'none').map((r) => r.model).join(', ') || '(none)');
-const dsFast3 = new Set([...pareto3(dsRows, (r) => r.avg_cost, (r) => r.pass_rate, dsEffNum)].filter((m) => !dsFront.has(m)));
+// 编码榜效率维 = 榜单自带的真速度 tokens ÷ duration（与 render-vc.mjs 同源，不跨榜融合）
+const vcNumSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
+const vcPlotted = vcRows.filter((r) => r.cost != null);
+console.log('vc: cost 缺失（只进表格不进图）=', (vcRows.length - vcPlotted.length), '行:', vcRows.filter((r) => r.cost == null).map((r) => `${r.model}(${r.harness})`).join(', ') || '(none)');
+const vcFast3 = new Set([...pareto3(vcPlotted, (r) => r.cost, (r) => r.score, vcNumSpeed, (r) => r.k)].filter((m) => !vcFront.has(m)));
 const aaFast3 = new Set([...pareto3(aaRows, (r) => r.cost, (r) => r.index, numSpeed)].filter((m) => !aaFront.has(m)));
 const tbFast3 = new Set([...pareto3(tbRows, (r) => r.cost, (r) => r.accuracy, tbNumSpeed, (r) => r.k)].filter((m) => !tbFront.has(m)));
 const pareto2On = (rows, names, costOf, yOf, nameOf = (r) => r.model) => pareto2(rows.filter((r) => names.has(nameOf(r))), costOf, yOf, nameOf);
-const dsFast = pareto2On(dsRows, dsFast3, (r) => r.avg_cost, (r) => r.pass_rate);
+const vcFast = pareto2On(vcPlotted, vcFast3, (r) => r.cost, (r) => r.score, (r) => r.k);
 const aaFast = pareto2On(aaRows, aaFast3, (r) => r.cost, (r) => r.index);
 const tbFast = pareto2On(tbRows, tbFast3, (r) => r.cost, (r) => r.accuracy, (r) => r.k);
-const dsRest = dsRows.filter((r) => !dsFront.has(r.model));
+const vcRest = vcPlotted.filter((r) => !vcFront.has(r.k));
 const aaRest = aaRows.filter((r) => !aaFront.has(r.model));
 const tbRest = tbRows.filter((r) => !tbFront.has(r.k));
-const dsCut = dsRest.filter((r) => !dsFast.has(r.model));
+const vcCut = vcRest.filter((r) => !vcFast.has(r.k));
 const aaCut = aaRest.filter((r) => !aaFast.has(r.model));
-const tbCut = tbRest.filter((r) => !tbFast.has(r.model));
-const dsWorst = dsCut.reduce((a, b) => (b.avg_cost > a.avg_cost ? b : a));
+const tbCut = tbRest.filter((r) => !tbFast.has(r.k)); // tbFast 是 uid 集合，按 model 查永远 miss（曾经的 bug：worst 会算成非前沿里最贵的那个）
+const vcWorst = vcCut.reduce((a, b) => (b.cost > a.cost ? b : a), vcCut[0]);
 const aaWorst = aaCut.reduce((a, b) => (b.cost > a.cost ? b : a));
 const tbWorst = tbCut.reduce((a, b) => (b.cost > a.cost ? b : a), tbCut[0]);
-const dsZone = dsRows.filter((r) => r.pass_rate >= 50 && r.avg_cost <= 2.5);
+const vcZone = vcPlotted.filter((r) => r.score >= 80 && r.cost <= 5);
 const aaZone = aaRows.filter((r) => r.index > 35 && r.cost < 1);
 const tbZone = tbRows.filter((r) => r.accuracy >= 40 && r.cost <= 10);
-const dsFrontList = [...dsRows].sort((a, b) => a.avg_cost - b.avg_cost).filter((r) => dsFront.has(r.model));
+const vcFrontList = [...vcPlotted].sort((a, b) => a.cost - b.cost).filter((r) => vcFront.has(r.k));
 const aaFrontList = [...aaRows].sort((a, b) => a.cost - b.cost).filter((r) => aaFront.has(r.model));
 const tbFrontList = [...tbRows].sort((a, b) => a.cost - b.cost).filter((r) => tbFront.has(r.model));
 
-// ---- 跨榜重合：同一归一键（fuse.mjs canonKey）即同一模型，不再是约等于 ----
-//   DS 前沿名 → AA 同键的前沿变体（取 index 最高者展示）
+// ---- 跨榜重合：同一归一键（openrouter.mjs normalizeSlug）即同一模型，不再是约等于 ----
+//   VC 前沿名 → AA 同键的前沿变体（取 index 最高者展示）
 const aaFrontByKey = new Map();
 for (const m of aaFront) {
-  const k = canonKey(m);
+  const k = normalizeSlug(m);
   if (!aaFrontByKey.has(k)) aaFrontByKey.set(k, []);
   aaFrontByKey.get(k).push(m);
 }
 for (const arr of aaFrontByKey.values()) arr.sort((a, b) => aaRows.find((r) => r.model === b).index - aaRows.find((r) => r.model === a).index);
-const overlap = [...dsFront].map((d) => [d, (aaFrontByKey.get(canonKey(d)) ?? [])[0]]).filter(([, a]) => a);
+const overlap = [...new Set(vcFrontList.map((r) => r.model))].map((d) => [d, (aaFrontByKey.get(normalizeSlug(d)) ?? [])[0]]).filter(([, a]) => a);
 
 // ---- SVG 内联（重写 id，避免同页重复） ----
 const prepSvg = (file, id) => readFileSync(path.join(DIR, file), 'utf8')
   .replace(/<\?xml[^?]*\?>\s*/g, '').trim()
   .replace('id="chart"', `id="${id}"`);
-const dsSvg = prepSvg('chart.svg', 'chart-code');
+const vcSvg = prepSvg('vc-chart.svg', 'chart-code');
 const aaSvg = prepSvg('aa-chart.svg', 'chart-gen');
 const tbSvg = HAS_TB ? prepSvg('tb-chart.svg', 'chart-tb') : '';
 const plansSvg = HAS_PLANS ? prepSvg('plans-chart.svg', 'chart-plans') : '';
 
-const usedFiles = [...new Set([...dsRows, ...aaRows, ...tbRows, ...plansRows]
+const usedFiles = [...new Set([...vcRows, ...aaRows, ...tbRows, ...plansRows]
   .map((r) => logoFileOfRow(r) ?? (r.aa_model ? logoFileOf(r.aa_model) : null)).filter(Boolean))];
 const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 
 // ---- 模型名归一化 → OpenRouter 详情页链接（精确命中拼详情页，
 //   OR 无详情页的回退搜索页；见 openrouter.mjs，构建期算好注入页面） ----
-const DS_LINK = Object.fromEntries(dsRows.map((r) => [r.model, dsLink(r.model).url]));
+const VC_LINK = Object.fromEntries(vcRows.map((r) => [r.k, vcLink(r.model, r.org).url]));
 const AA_LINK = Object.fromEntries(aaRows.map((r) => [r.model, aaLink(r.model, r.creator).url]));
 const TB_LINK = Object.fromEntries(tbRows.map((r) => [r.model, tbLink(r.model, r.model_org).url]));
-const orMiss = [...Object.entries(DS_LINK), ...Object.entries(AA_LINK)]
-  .filter(([, u]) => u.includes('/models?q=')).map(([m, u]) => `${m} -> ${u}`);
-if (orMiss.length) console.log('openrouter fallback(search):', orMiss.length, orMiss.join('; '));
+const orMiss = [...new Set([...Object.values(VC_LINK), ...Object.values(AA_LINK)])]
+  .filter((u) => u.includes('/models?q='));
+if (orMiss.length) console.log('openrouter fallback(search):', orMiss.length, 'models');
 
 // ---- OpenRouter Top 缺失（仅 --with-top-missing 时注入；可选 top-missing.json） ----
 const topMissingPath = path.join(DIR, 'top-missing.json');
@@ -207,7 +212,7 @@ const EFFORT_COLOR = { max: '#e45756', xhigh: '#4c78a8', high: '#f58518', medium
 // 打印的前沿/高效区/最惨名单，自由撰写 HTML 片段后经 --obs 注入 #llm-obs
 // （--obs <文件> 或 --obs - 从 stdin 读；也可用 MKL_OBS 环境变量传文件路径）。
 
-// 通用 unbench 行内 HTML（DS 7 列 / AA 7 列）。
+// 通用 unbench 行内 HTML（VC 7 列 / AA 7 列）。
 // `idx` 列填 "—"；Model 列里塞徽标 + OR 信息子行；其它列填 "—"。
 const fmtWeekly = (n) => n >= 1e12 ? (n / 1e12).toFixed(1) + 'T' : n >= 1e9 ? (n / 1e9).toFixed(1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(0) + 'M' : String(n);
 const tmSubLine = (m) => {
@@ -243,7 +248,7 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</title>
+<title>模型斩杀线：通用智力 × 编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #fafafa; color: #222; }
@@ -342,13 +347,13 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
 </head>
 <body>
 <div class="wrap">
-  <h1>🔪 模型斩杀线：通用智力 × 长程编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</h1>
+  <h1>🔪 模型斩杀线：通用智力 × 编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</h1>
   <div class="stale" id="stale-tip">⚠️ 数据已过期（生成于 <span id="stale-date">${GEN_DATE}</span>，距今超过 15 天），模型迭代较快请获取最新报告。</div>
-  <div class="sub">${[HAS_TB || HAS_PLANS ? (HAS_TB && HAS_PLANS ? '四榜' : '三榜') : '双榜'].slice(0, 0)}Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 长程编码能力 ${dsRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${HAS_PLANS ? ` / CommandCode ${plansRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
+  <div class="sub">${[HAS_TB || HAS_PLANS ? (HAS_TB && HAS_PLANS ? '四榜' : '三榜') : '双榜'].slice(0, 0)}Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 编码能力 ${vcRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${HAS_PLANS ? ` / CommandCode ${plansRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-board="board-gen" role="tab" aria-selected="true">通用智力</button>
-    <button class="tab" data-board="board-code" role="tab" aria-selected="false">长程编码能力</button>
+    <button class="tab" data-board="board-code" role="tab" aria-selected="false">编码能力</button>
     ${HAS_TB ? `<button class="tab" data-board="board-tb" role="tab" aria-selected="false">终端智能</button>` : ''}
     ${HAS_PLANS ? `<button class="tab" data-board="board-plans" role="tab" aria-selected="false">CommandCode</button>` : ''}
   </div>
@@ -370,14 +375,14 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
 
   <div class="board hidden" id="board-code">
   <div class="card chart-box" id="card-code">
-    ${dsSvg}
+    ${vcSvg}
     <div class="tooltip" id="tip-code"></div>
   </div>
 
   <div class="card">
-    <h2>长程编码能力排名</h2>
+    <h2>编码能力排名（Vibe Code Bench）</h2>
     <table>
-      <thead><tr><th>#</th><th>Model</th><th>Effort</th><th class="num">PASS@1</th><th class="num">Avg Cost</th><th class="num">Steps</th><th class="num">Tokens/s*</th></tr></thead>
+      <thead><tr><th>#</th><th>Model</th><th>Harness</th><th class="num">Score</th><th class="num">Cost/Test</th><th class="num">Tokens/Test</th><th class="num">Duration</th><th class="num">Tokens/s</th></tr></thead>
       <tbody id="tbody-code"></tbody>
     </table>
   </div>
@@ -420,20 +425,20 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
     <div id="llm-obs">${OBS}</div>
   </div>
 
-  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://deepswe.datacurve.ai/${HAS_TB ? ' · https://www.tbench.ai' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
+  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.tbench.ai' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
   <div class="gen-date">报告生成日期 ${GEN_DATE} · 榜单数据来自第三方公开来源，仅供学习交流，不构成选型或采购建议</div>
 </div>
 
 <script>
-const DS_ROWS = ${JSON.stringify(dsRows)};
+const VC_ROWS = ${JSON.stringify(vcRows)};
 const AA_ROWS = ${JSON.stringify(aaRows)};
 const LOGO_MAP = ${JSON.stringify(LOGO_MAP)};
 const EFFORT_COLOR = ${JSON.stringify(EFFORT_COLOR)};
-const DS_SURVIVORS = new Set(${JSON.stringify([...dsFront])});
+const VC_SURVIVORS = new Set(${JSON.stringify([...vcFront])});
 const AA_SURVIVORS = new Set(${JSON.stringify([...aaFront])});
-const DS_FAST = new Set(${JSON.stringify([...dsFast])});
+const VC_FAST = new Set(${JSON.stringify([...vcFast])});
 const AA_FAST = new Set(${JSON.stringify([...aaFast])});
-const DS_LINK = ${JSON.stringify(DS_LINK)};
+const VC_LINK = ${JSON.stringify(VC_LINK)};
 const AA_LINK = ${JSON.stringify(AA_LINK)};
 const TB_ROWS = ${JSON.stringify(tbRows)};
 const TB_TABLE = ${JSON.stringify(tbBest)};
@@ -445,7 +450,6 @@ const HAS_PLANS = ${JSON.stringify(HAS_PLANS)};
 const PLANS_ROWS = ${JSON.stringify(plansRows)};
 const PLANS_SURVIVORS = new Set(${JSON.stringify([...plansFront])});
 const PLANS_LINK = ${JSON.stringify(Object.fromEntries(plansRows.map((r) => [r.model, dsLink(r.model).url])))};
-const DS_FUSED = ${JSON.stringify(Object.fromEntries([...dsFused].map(([m, f]) => [m, { text: f.text, matched: f.matched, kind: f.kind }])))};
 const WITH_TM = ${JSON.stringify(WITH_TOP_MISSING)};
 const TM_SUCCESSORS = ${JSON.stringify(TM_SUCCESSORS)};
 const TM_FREE = ${JSON.stringify(TM_FREE)};
@@ -491,49 +495,51 @@ const tmCells = (m, numCols) => {
   return '<td>—</td>' + mid + rest;
 };
 
-// ---- DeepSWE 表格 ----
+// ---- 编码能力表格（Vals AI Vibe Code Bench，全部行按 score 降序；cost 缺失的行照常列出，Cost 列显示 —）----
 {
   const tbody = document.getElementById('tbody-code');
-  const trByModel = new Map(); // 用于 unbench 插入"上一代"锚点上方
-  const trByCanon = new Map(); // 按 normalizeSlug(dsLink) 也建索引（AA-highlight succ 用 canon key 找锚点）
-  [...DS_ROWS].sort((a,b)=>b.pass_rate-a.pass_rate).forEach((r,i)=>{
-    const alive = DS_SURVIVORS.has(r.model);
-    const fast = !alive && DS_FAST.has(r.model);
+  const trByModel = new Map(); // 用于 unbench 插入"上一代"锚点上方（同名模型多 harness 时取第一行）
+  const trByCanon = new Map(); // 按 normalizeSlug(OR slug) 也建索引（AA-highlight succ 用 canon key 找锚点）
+  [...VC_ROWS].sort((a,b)=>b.score-a.score).forEach((r,i)=>{
+    const alive = VC_SURVIVORS.has(r.k);
+    const fast = !alive && VC_FAST.has(r.k);
     const tr = document.createElement('tr');
     tr.className = alive ? 'alive' : (fast ? 'fast' : '');
-    if (fast) tr.title = '高效：能力/成本被压制，但 Tokens/s 更高（更快），不是真被斩';
-    tr.dataset.url = DS_LINK[r.model];
+    if (fast) tr.title = '高效：能力/成本被压制，但 Tokens/s 更高（跑得更快），不是真被斩';
+    tr.dataset.url = VC_LINK[r.k];
     tr.tabIndex = 0;
     tr.innerHTML = \`<td>\${i+1}</td>
-      <td class="model">\${alive ? '🔪 ' : (fast ? '⚡ ' : '')}\${orA(r.model, DS_LINK[r.model])}\${alive ? ' <span class="tag">高性价比</span>' : (fast ? ' <span class="tag tag-fast">高效</span>' : '')}</td>
-      <td><span class="eff" style="background:\${EFFORT_COLOR[r.effort]}">\${r.effort}</span></td>
-      <td class="num">\${r.pass_rate}%</td>
-      <td class="num">$\${r.avg_cost.toFixed(2)}</td>
-      <td class="num">\${r.steps}</td>
-      <td class="num">\${DS_FUSED[r.model].text}</td>\`;
+      <td class="model">\${alive ? '🔪 ' : (fast ? '⚡ ' : '')}\${orA(r.model, VC_LINK[r.k])}\${alive ? ' <span class="tag">高性价比</span>' : (fast ? ' <span class="tag tag-fast">高效</span>' : '')}</td>
+      <td>\${r.harness}</td>
+      <td class="num">\${r.score}%</td>
+      <td class="num">\${r.cost == null ? '—' : '$' + r.cost.toFixed(2)}</td>
+      <td class="num">\${r.tokens_disp || '—'}</td>
+      <td class="num">\${r.duration_disp || '—'}</td>
+      <td class="num">\${r.speed == null ? '—' : r.speed.toLocaleString()}</td>\`;
     tbody.appendChild(tr);
-    trByModel.set(r.model, tr);
-    trByCanon.set(normalizeSlug(DS_LINK[r.model].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), '')), tr);
+    if (!trByModel.has(r.model)) trByModel.set(r.model, tr);
+    const canon = normalizeSlug(VC_LINK[r.k].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), ''));
+    if (!trByCanon.has(canon)) trByCanon.set(canon, tr);
   });
   if (WITH_TM) {
     // 1) 上一代型：插入到对应锚点的正上方
-    //    predecessor.key 可能是 ds display name（findPredecessor 出来的）、也可能是 AA canon key（AA-highlight 出来的）
-    for (const s of TM_SUCCESSORS.filter((x) => x.predecessor.board === 'ds')) {
+    //    predecessor.key 可能是 VC display name（findPredecessor 出来的）、也可能是 AA canon key（AA-highlight 出来的）
+    for (const s of TM_SUCCESSORS.filter((x) => x.predecessor.board === 'vc')) {
       const anchor = trByModel.get(s.predecessor.key) || trByCanon.get(s.predecessor.key);
       if (!anchor) {
-        // AA highlight 但 DS 完全没这个 row（AA canon key 不在 trByCanon 里）。
+        // AA highlight 但 VC 完全没这个 row（AA canon key 不在 trByCanon 里）。
         // 可能是两种原因：1) AA 独立信号（OR 上没有，via=aa-highlight-no-or），
-        // 2) OR 上有但 dsLink 覆盖后还是找不到锚点。
+        // 2) OR 上有但 vcLink 覆盖后还是找不到锚点。
         const tr = document.createElement('tr');
         tr.className = 'unbench-succ';
         tr.dataset.url = tmUrl(s);
         tr.tabIndex = 0;
         if (s.predecessor.via === 'aa-highlight-no-or') {
-          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），DS 暂缺（锚点不在 DS 表中）';
+          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vibe Code Bench 暂缺（锚点不在榜中）';
         } else {
-          tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 DS 暂缺（推测锚点 ' + s.predecessor.key + ' 不在 DS 表中）';
+          tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 Vibe Code Bench 暂缺（推测锚点 ' + s.predecessor.key + ' 不在榜中）';
         }
-        tr.innerHTML = tmCells(s, 7);
+        tr.innerHTML = tmCells(s, 8);
         tbody.appendChild(tr);
         continue;
       }
@@ -542,11 +548,11 @@ const tmCells = (m, numCols) => {
       tr.dataset.url = tmUrl(s);
       tr.tabIndex = 0;
       if (s.predecessor.via === 'aa-highlight-no-or') {
-        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），DS 暂缺；上一代疑似「' + s.predecessor.key + '」';
+        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vibe Code Bench 暂缺；上一代疑似「' + s.predecessor.key + '」';
       } else {
-        tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 DeepSWE；推测为上一代「' + s.predecessor.key + '」的后续';
+        tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 Vibe Code Bench；推测为上一代「' + s.predecessor.key + '」的后续';
       }
-      tr.innerHTML = tmCells(s, 7);
+      tr.innerHTML = tmCells(s, 8);
       tbody.insertBefore(tr, anchor);
     }
     // 2) 纯免费型：按 OR 排名顺序（高位先）插到最顶部
@@ -556,7 +562,7 @@ const tmCells = (m, numCols) => {
       tr.dataset.url = tmUrl(f);
       tr.tabIndex = 0;
       tr.title = 'OR Top ' + f.rank + ' 免费模型（' + fmtWeekly(f.weekly_tokens) + '/周），双榜暂缺';
-      tr.innerHTML = tmCells(f, 7);
+      tr.innerHTML = tmCells(f, 8);
       tbody.insertBefore(tr, tbody.firstChild);
     }
   }
@@ -826,10 +832,10 @@ function bindTip(svgId, cardId, tipId, fmt) {
 const logoImg = (d) => d.logo ? \`<img class="tip-logo" src="\${d.logo}" alt="">\` : '';
 bindTip('chart-code', 'card-code', 'tip-code', (d) => {
   const m = d.el.dataset;
-  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span><span class="tip-effort" style="background:\${EFFORT_COLOR[m.effort]}">\${m.effort}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
-    <div class="tip-row">PASS@1: <b>\${m.pass}%</b></div>
-    <div class="tip-row">Avg Cost: <b>$\${(+m.cost).toFixed(2)}</b></div>
-    <div class="tip-row">Steps: <b>\${m.steps || '—'}</b> · Speed: <b>\${m.speed && m.speed !== '—' ? m.speed + ' tok/s*' : '—'}</b></div>\`;
+  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span><span class="tip-effort" style="background:#5b7a3a">\${m.harness}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
+    <div class="tip-row">Vibe Code Score: <b>\${m.score}%</b></div>
+    <div class="tip-row">Cost / Test: <b>$\${(+m.cost).toFixed(2)}</b></div>
+    <div class="tip-row">Tokens: <b>\${m.tokens || '—'}</b> · Duration: <b>\${m.dur || '—'}</b> · Speed: <b>\${m.speed ? (+m.speed).toLocaleString() + ' tok/s' : '—'}</b></div>\`;
 });
 bindTip('chart-gen', 'card-gen', 'tip-gen', (d) => {
   const m = d.el.dataset;
@@ -876,7 +882,7 @@ if (HAS_TB) bindTip('chart-tb', 'card-tb', 'tip-tb', (d) => {
 
 writeFileSync(OUT, html);
 console.log('index.html bytes:', html.length, '→', OUT);
-console.log(`deepswe frontier: ${dsFront.size}/${dsRows.length}, zone: ${dsZone.length}, worst: ${dsWorst.model}/$${dsWorst.avg_cost}`);
+console.log(`vc frontier: ${vcFront.size}/${vcPlotted.length} (plotted), zone: ${vcZone.length}, worst: ${vcWorst.model}(${vcWorst.harness})/$${vcWorst.cost}`);
 console.log(`aa frontier: ${aaFront.size}/${aaRows.length}, zone: ${aaZone.length}, worst: ${aaWorst.model}/$${aaWorst.cost}`);
 console.log(`tb frontier: ${tbFront.size}/${tbRows.length}, zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
 console.log('overlap:', overlap.length ? overlap.map(([d, a]) => `${d} = ${a}`).join('; ') : '(none)');
