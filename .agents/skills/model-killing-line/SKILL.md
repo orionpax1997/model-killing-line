@@ -104,9 +104,14 @@ see below. The scripts read/write via cwd and need only node stdlib.
   latency, total). Keeps only Intelligence Index > 20 with non-empty cost.
   No JSON API exists for the Cost column — SSR HTML is the only source.
 - `render-aa.mjs`: same structure as `render.mjs` but for AA data
-  (log x 基础域 0.01~10、y 基础域 20~55——**数据超界时自适应扩展**：三图的 (min,max)
-  改为 `基础域 ∩ (数据 min/max 扩到 5 的整数倍)`，避免新模型（如 Claude Opus 5.5
-  IntelligenceIndex=58 > 55）被画到边框外，y 刻度随之生成到新上限；
+  (log x 基础域 0.01~10、y 基础域 20~55——**数据超界 / 大量空白时坐标轴自适应**：
+  x 按 log 刻度阶梯 `[0.01,0.02,0.05,0.1,0.2,0.5,1,2,5,10,15,20,50,100]` 取
+  「比数据最小成本更低一档的刻度」为左边界（数据 0.07 起时轴不再从 $0.01 起，
+  否则左侧 1/4 画布是空的）、「覆盖最大成本的下一档刻度」为右边界
+  （基础域 $10 封顶会把 $10~13 的模型画到右边框外）；y 上界 = `数据 max + 2`
+  再扩到 5 的整数倍（留出前沿大圆 R18+外圈的位置，避免 59 分的点露出画布顶部），
+  下界 = `min(20, 数据 min 向下扩到 5 的整数倍)`；x tick 由同一阶梯按域内筛选生成，
+  y 刻度随之生成到新上界；
   zone Index > 35 & < $1, `data-creator` / `data-index` 属性,
   same-base-name single label + collision-aware callouts, efficient 高效点描蓝圈同上）。
 - `fetch-tb.mjs`: GETs https://www.tbench.ai/ (Terminal-Bench 4.0 官方榜) 首页 SSR
@@ -232,17 +237,21 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
   模型名想链 OpenRouter 可用页面内联的链接，样式类 `.obs a` 已就绪），存文件后用
   `gen-html.mjs --obs <文件>` 注入 `#llm-obs`，再展示/截图给用户。
 - 唯一要求：基于本轮实际数据现看现写，不得复用上一轮的解读内容；
-  开头第一条固定为 📌 太长不看，用非常精简的一句话按成本优先 / 效率优先 / 能力优先各给一个选择；之后条数句式自由发挥。
+  开头第一条固定为 📌 太长不看，用非常精简的一句话按成本优先 / 效率优先 / 能力优先各给一个选择；**三个选择都从 AA 榜取**（详见下面「解读撰写原则」第 1 条），之后条数句式自由发挥。
 
 ### 解读撰写原则（Agent 必读的视角提示词）
 
-每次撰写解读前必须把以下三条原则作为强制上下文阅读，不能跳过：
+每次撰写解读前必须把以下五条原则作为强制上下文阅读，不能跳过：
 
-1. **以 AA Intelligence Index 为主**。三榜数据时效不一致：AA Intelligence Index
-   每日更新，是最有信号价值的源；DeepSWE（长程编码）和 TBench 4.0（终端智能）
-   重评测成本高，更新都不勤。撰写推荐的视角应该以 AA 数据为锚，DS / TB 只作为
-   "已实测档"的补充佐证，不能本末倒置用 DS/TB 的"缺测"来否定 AA 上的高 Index
-   候选。
+1. **推荐一律从 AA 榜选，📌 太长不看也不例外**。三榜数据时效不一致：AA Intelligence
+   Index 每日更新，是唯一有"最新信号"的源；DeepSWE（长程编码）和 TBench 4.0（终端智能）
+   重评测成本高，更新都不勤，实测档往往比当下新一代落后一代。
+   **📌 太长不看的三个选择（成本优先 / 效率优先 / 能力优先）必须全部取自 AA 榜**
+   （AA 的 Index + Cost per Task + Tokens/s 三个字段就够定档），并在括号里标注
+   DS / TB 的实测档作为佐证（"上一代在 DS 已 74%"），而不是用 DS / TB 的数字当推荐
+   依据。例如成本优先给 `MiMo-V2.6-Pro`（AA 46 分 / $0.13）而不是
+   `GLM 5.3 Flash`（只在 DS 有 63%/$0.24 的实测分）——后者虽然便宜，但在 AA 上
+   没有对应 Index，用它定档就是拿慢榜压快榜。
 2. **缺测 ≠ 短板**。DS / TB 暂未实测的"新一代"模型（即页面里挂 `📊 仅 AA 实测`
    徽标的 `unbench-succ` 行）应理解为 "按 AA 实测 + 代际推测的候选"，而不是
    "不推荐" / "待更新" / "缺测 = 短板"。新一代模型通常强于上一代，所以这些候选
@@ -254,12 +263,20 @@ DeepSWE 表格新增 Steps + Tokens/s*（融合值，`*`=来自 AA 同名变体�
    一行也要按这个视角写：被推荐的应该是"AA Index X + 推测 ≥ 上一代 DS/TB 数据"
    的组合，而不是"DS/TB 缺测所以搁置"。
 4. **OR Top Weekly 流量信号独立成段**。OpenRouter Top Weekly 的周用量是 production
-   data 的代理信号 — 流量大但 DS/AA/TB 都未实测的模型（如 DeepSeek V4.1 Flash
-   18.8T/wk、Hy4 preview 13.9T/wk、GLM 5.3 Flash 19.3T/wk）是"benchmark 滞后于
-   生产采用"的典型案例，解读里要单独成段提及（与"仅 AA 实测"段区分开）。
+   data 的代理信号 — 流量大但 DS/AA/TB 都未实测的模型（典型是 DeepSeek V4.1 Flash /
+   Hy4 preview / GLM 5.3 Flash，具体量级一律读本轮 `or-data.json` 的
+   `weekly_tokens`，**不要引用上一轮的旧数字**）是"benchmark 滞后于生产采用"的典型
+   案例，解读里要单独成段提及（与"仅 AA 实测"段区分开）。
+5. **引用徽标 / 集合状态前先核对 render 输出**。`render-*.mjs` 每次会打印
+   `frontier points` / `efficient` / `zone` 名单，解读里的 🔪 / ⚡ / 📊 说法必须与那
+   三个名单一致。已踩过的坑：**AA 榜的 2D 前沿与 ⚡ 高效圈交集常常为空**（前沿只看
+   能力×成本，⚡ 是 3D 差集），所以"某点在前沿上又套着 ⚡"这种话要先把两个名字
+   都在两份名单里查到才能写；查不到就只写其中一个。同理 DS 榜的 ⚡ 是**复合效率 E
+   = AA 融合 Tokens/s ÷ 自身 Steps**，不是 AA 的原始速度，别拿 AA speed 解释 DS 的 ⚡。
 
 不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
-缺测"说成"不推荐"；用 DS/TB 的缺测率来评价 AA 上的高 Index 模型。
+缺测"说成"不推荐"；用 DS/TB 的缺测率来评价 AA 上的高 Index 模型；**用 DS / TB 的
+数字给 📌 太长不看 定档**（推荐理由的 X / Y 必须是 AA 的 Index 与 Cost per Task）。
 
 ## CommandCode tab 的口径与过滤规则
 

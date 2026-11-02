@@ -91,18 +91,31 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 const svgW = 920, svgH = 560;
 const padL = 70, padR = 30, padT = 50, padB = 60;
 
-// x: log 基础域 0.01 ~ 10（数据全在域内时保持，不改刻度）
-const xMin = 0.01, xMax = 10;
+// x: log 基础域 0.01 ~ 10；数据超界/大量空白时按 log 刻度阶梯自适应：
+//   左边界 = 比数据最小成本更低一档的刻度（基础 0.01 之上不再留大片空白，
+//            数据最小成本 $0.07 而轴从 $0.01 起时左侧 1/4 画布是空的）
+//   右边界 = 覆盖数据最大成本的下一档刻度（基础 10 封顶会把这批 $10~13 的
+//            模型画到右边框外，见 issue）
+const X_LADDER = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 20, 50, 100];
+const pickLE = (v, fallback) => { const c = X_LADDER.filter((t) => t <= v); return c.length ? c[c.length - 1] : fallback; };
+const pickGE = (v, fallback) => { const c = X_LADDER.filter((t) => t >= v); return c.length ? c[0] : fallback; };
+const BASE_X_MIN = 0.01, BASE_X_MAX = 10;
+const dataXs = rows.map((r) => +r.cost).filter((v) => v > 0);
+const xMin = Math.min(...dataXs) > BASE_X_MIN
+  ? Math.max(BASE_X_MIN, pickLE(Math.min(...dataXs) * 0.85, BASE_X_MIN))
+  : pickLE(Math.min(...dataXs), BASE_X_MIN / 10);
+const xMax = Math.max(BASE_X_MAX, pickGE(Math.max(...dataXs), Math.max(...dataXs) * 1.1));
 const xScale = (v) => Math.log10(v / xMin) / Math.log10(xMax / xMin);
 const plotW = svgW - padL - padR;
 const X = (v) => padL + xScale(Math.max(v, xMin)) * plotW;
 
-// y: 基础域 20 ~ 55；数据超界时向下/向上扩展到 5 的整数倍
+// y: 基础域 20 ~ 55；数据超界时向下/向上扩展到 5 的整数倍（+2 留出前沿大圆
+// R18+外圈的位置，否则最顶上那个点会露出画布边框外）
 //（Claude Opus 5.5 max 的 IntelligenceIndex=58 曾 >55 被画到边框外，见 issue）
 const niceCeil5 = (m) => Math.ceil(Math.max(m, 55) / 5) * 5;
 const dataYs = rows.map((r) => +r.index || 0);
 const yMin = Math.min(20, Math.floor(Math.min(...dataYs) / 5) * 5);
-const yMax = niceCeil5(Math.max(...dataYs));
+const yMax = niceCeil5(Math.max(...dataYs) + 2);
 const yScale = (v) => (v - yMin) / (yMax - yMin);
 const plotH = svgH - padT - padB;
 const Y = (v) => padT + (1 - yScale(v)) * plotH;
@@ -113,7 +126,7 @@ const ZONE_INDEX = 35;
 const zoneX = X(ZONE_COST);
 const zoneY = Y(ZONE_INDEX);
 
-const xTicks = [0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+const xTicks = X_LADDER.filter((t) => t >= xMin - 1e-9 && t <= xMax + 1e-9);
 const yTicks = []; for (let t = 25; t <= yMax; t += 5) yTicks.push(t);
 
 let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" id="chart" style="font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;background:#ffffff">`;

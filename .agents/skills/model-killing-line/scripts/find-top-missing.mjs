@@ -130,8 +130,24 @@ for (const r of tbRows) {
   const k = normalizeSlug(r.model);
   if (!tbByCanon.has(k)) tbByCanon.set(k, r);
 }
-const tbHas = (slug) => tbByCanon.has(slug);
-const tbFind = (slug) => tbByCanon.get(slug) ?? null;
+// TBench 的 model 名常常没有品牌前缀（TB `Opus 5.5` vs AA `Claude Opus 5.5`、
+// TB `Sonnet 5.5` vs AA `Claude Sonnet 5.5`），直接按 AA canon 查表会漏命中，
+// 于是把已经在 TB 上的模型误报成「TB 暂缺」并在表底插一条 🆕 行——而它其实是 TB 榜一。
+// 所以除精确 canon 外再建一层「后缀别名」：查询 canon 以某条 TB canon 结尾即视为同一模型
+// （claude-opus-5-5 → opus-5-5）。按长度倒序扫，优先匹配更长的 TB canon。
+const tbCanonByLen = [...tbByCanon.keys()].sort((a, b) => b.length - a.length);
+const tbCanonAlias = (slug) => {
+  if (tbByCanon.has(slug)) return slug;
+  for (const c of tbCanonByLen) {
+    if (slug.endsWith('-' + c)) return c;
+  }
+  return null;
+};
+const tbHas = (slug) => tbCanonAlias(slug) !== null;
+const tbFind = (slug) => {
+  const k = tbCanonAlias(slug);
+  return k ? tbByCanon.get(k) : null;
+};
 
 // strip 启发式：从一个 OR slug 派生一组"可能的上一代"候选 slug（按优先级）。
 const TRAILING_TOKENS = [
