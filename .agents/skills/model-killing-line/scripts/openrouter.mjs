@@ -101,11 +101,6 @@ const build = (displayName, slug, org) => {
 export const aaLink = (model, creator) =>
   build(model, normalizeSlug(model), CREATOR_TO_ORG.get(normKey(creator ?? '')) ?? null);
 
-/** TBench 行：tbLink(model, model_org)。TB 的 model 名不带前缀（如 'Fable 5.1'、'Opus 5'），
- *  model_org 来自 fetch-tb 的 model_org 字段（'Anthropic'/'OpenAI'/'xAI'/'Google'/'Z.ai'…），
- *  与 AA 的 Creator 列同义，直接复用 aaLink 的归一化/映射即可。 */
-export const tbLink = (model, model_org) => aaLink(model, model_org);
-
 // Vals AI 详情页路径里的 org 前缀 → OpenRouter org。核对不上的（devin/ant 等 OR 侧
 // 没有同名 org 的）故意不写 → build() 拿到 null org，自动回退搜索页。
 const VALS_ORG_TO_OR = new Map(Object.entries({
@@ -134,15 +129,22 @@ const VALS_ORG_TO_OR = new Map(Object.entries({
   tencent: 'tencent',
 }));
 
-/** Vals AI（Vibe Code Bench）行：vcLink(model, org)，org 取自详情页路径 `/models/<org>_<slug>`，
+/** Vals AI 行：vcLink(model, org)，org 取自详情页路径 `/models/<org>_<slug>`，
  *  如 ('Claude Sonnet 5.5', 'anthropic') → anthropic/claude-sonnet-5.5。
- *  没有 org（老版本数据）时回退按模型名前缀推（与 dsLink 同构）。 */
+ *  Vibe Code Bench 与 Terminal-Bench 4.0 两个榜同构，都用这个函数。
+ *  没有 org（老版本数据）时回退搜索页（build 拿到 null org 自动处理）。 */
 export const vcLink = (model, org) => {
   const o = VALS_ORG_TO_OR.get(String(org ?? '').toLowerCase()) ?? null;
   // OR 上 Qwen 的 id 是 `qwen3.8-27b`（品牌与版本连写），Vals/AA 写 `Qwen 3.8 27B`
   const slug = normalizeSlug(model).replace(/^qwen-/, 'qwen');
   return build(model, slug, o);
 };
+
+/** Terminal-Bench 4.0 行（Vals AI 同站同源）：tbLink(model, org) = vcLink 的同义别名。
+ *  旧 tbench.ai 榜模型名不带品牌前缀、org 是 'Anthropic'/'Z.ai' 这种 Creator 列，
+ *  那时走 aaLink；换源后 TB 与 Vibe Code Bench 一样是 `/models/<org>_<slug>` 详情页，
+ *  统一按 Vals org 前缀拼链接。 */
+export const tbLink = vcLink;
 
 /** DeepSWE 行：dsLink(model)，如 'gemini-3.8-flash' → google/gemini-3.8-flash */
 export const dsLink = (model) => {

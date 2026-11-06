@@ -8,6 +8,8 @@
 //
 // 编码榜身份键 = model（fetch-vc 已把同模型的多 harness run 折叠成最高分那次，
 //   harness 不进任何展示面），图上圈 / 表格行 / tooltip 三态都按 model 判定。
+// 终端智能榜（Vals AI Terminal-Bench 4.0）与它同源同构，同样一行一个模型、6 列表格、
+//   Duration / Test 当效率维；只是 Y 叫 Score、zone 阈值 40%/$10。
 //
 // 可选：--with-top-missing（或 MKL_INCLUDE_TOP_MISSING=1）会把 OpenRouter Top 20 里
 //   "用了但还没上双榜"的模型嵌进表格：
@@ -46,9 +48,9 @@ for (const f of ['vc-data.json', 'vc-chart.svg', 'aa-data.json', 'aa-chart.svg']
     process.exit(1);
   }
 }
-// TBench（Terminal-Bench 4.0）第三个榜为可选：tb-data.json + tb-chart.svg 都存在才启用终端智能 tab
+// 终端智能（Vals AI Terminal-Bench 4.0）第三个榜为可选：tb-data.json + tb-chart.svg 都存在才启用
 const HAS_TB = existsSync(path.join(DIR, 'tb-data.json')) && existsSync(path.join(DIR, 'tb-chart.svg'));
-if (!HAS_TB) console.log('TBench: tb-data.json/tb-chart.svg 未找到，跳过「终端智能」榜（跑 fetch-tb → render-tb 可启用）');
+if (!HAS_TB) console.log('Vals TB: tb-data.json/tb-chart.svg 未找到，跳过「终端智能」榜（跑 fetch-tb → render-tb 可启用）');
 // CommandCode 榜（Max 10× 每月可跑请求数 × AA Index）第四个榜为可选：plans-data.json + plans-chart.svg
 const HAS_PLANS = existsSync(path.join(DIR, 'plans-data.json')) && existsSync(path.join(DIR, 'plans-chart.svg'));
 if (!HAS_PLANS) console.log('Plans: plans-data.json/plans-chart.svg 未找到，跳过「CommandCode」榜（跑 fetch-plans → render-plans 可启用）');
@@ -88,32 +90,20 @@ const pareto3 = (rows, costOf, yOf, speedOf, nameOf = (r) => r.model) => {
 };
 const vcFront = pareto2(vcRows.filter((r) => r.cost != null), (r) => r.cost, (r) => r.score, (r) => r.k);
 const aaFront = pareto2(aaRows, (r) => r.cost, (r) => r.index);
-// TBench 独立成榜（不与 DS/AA 归一化融合）：能力=Accuracy，成本=Cost/Task，效率=Run 平均 tok/s。
-// TB 同一模型在同榜有多个 effort 变体（各自独立成行），所以判定维度用 uid = model+effort+agent，
-// 不能像 DS/AA 那样只按 model —— 否则图上 5 个前沿点、表格只高亮 2 行，三态不一致。
-const tbUid = (r) => `${r.model}\u0000${r.effort ?? ''}\u0000${r.agent}`;
+// 终端智能榜（Vals AI Terminal-Bench 4.0）独立成榜：能力=Score，成本=Cost/Test，
+// 效率=Duration/Test。与编码榜同源同构，一行一个模型，身份键就是 model
+// （旧 tbench.ai 榜是 model×agent×effort 每个 run 一行，换源后不再有 effort 变体）。
+const tbUid = (r) => r.model;
 const tbRows = HAS_TB ? JSON.parse(readFileSync(path.join(DIR, 'tb-data.json'), 'utf8')).map((r) => ({ ...r, k: tbUid(r) })) : [];
 
-// 表格展示全部 effort 变体（27 行）：按 accuracy 降序、competition ranking 同分同号跳号。
-// 注：tbench.ai 页面默认只列每模型最佳变体（模型级 rank 1..15，含 13/13/15），
-// 这里按用户要求给全变体视图；alive/⚡ 三态仍由全变体 werbose uid（r.k）判定。
-const tbBest = (() => {
-  const arr = [...tbRows].sort((x, y) => y.accuracy - x.accuracy); // 稳定排序保留同分之原始顺序
-  let prevAcc = null, prevRank = 0;
-  arr.forEach((r, i) => {
-    r.competition_rank = r.accuracy === prevAcc ? prevRank : i + 1;
-    prevAcc = r.accuracy;
-    prevRank = r.competition_rank;
-  });
-  return arr;
-})();
-const tbNumSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
-// 斩杀线用全变体口径（同 render-tb.mjs）：所有 effort 变体都参与 Pareto；
-// 页面表格是每模型最佳变体的模型级视图（tbBest），两者都保留
-const tbFront = pareto2(tbRows, (r) => r.cost, (r) => r.accuracy, (r) => r.k);
-// CommandCode 榜：X = 单次请求成本 $/1000 次（代价轴），Y = AA Index，和前三张榜同构。
-// 不用 requests_month 当横轴：那个量带额度池差异（standard $150 / premium $100），
-// premium 模型会整体左移约 48px，看起来更便宜其实只是额度少。cost_per_1k 是纯 API 价。
+// 表格按 score 降序（与 Vals 页面同序）；cost 缺失的行照常列出，只是没有 X 坐标不进图。
+const tbTable = [...tbRows].sort((a, b) => b.score - a.score);
+// 效率维 = Duration / Test（秒，越短越高效）；pareto3 第三维按「越大越好」，故取负号
+const tbNumDur = (r) => (r.duration_sec == null ? -Infinity : -r.duration_sec);
+const tbPlotted = tbRows.filter((r) => r.cost != null && r.cost > 0);
+const tbFront = pareto2(tbPlotted, (r) => r.cost, (r) => r.score, (r) => r.k);
+// CommandCode 榜：X = 官方 Requests / month（log 轴，向右＝更能跑），Y = 智力（CC 优先 / AA 兜底）。
+// 请求数一律原样引用官方 Max 10× 表；自算 token 公式只作 QA，不参与坐标 / zone / Pareto。
 const plansMain = plansRows.filter((r) => !r.contributor);
 // MIN_STEP 必须和 render-plans.mjs 里的 paretoOf 保持一致，否则表格的 🔪 会和图上的
 // 阶梯对不上（曾经图上 5 步、表格标 6 个 🔪）。改动时两边同步。
@@ -141,26 +131,26 @@ const vcPlotted = vcRows.filter((r) => r.cost != null);
 console.log('vc: cost 缺失（只进表格不进图）=', (vcRows.length - vcPlotted.length), '行:', vcRows.filter((r) => r.cost == null).map((r) => r.model).join(', ') || '(none)');
 const vcFast3 = new Set([...pareto3(vcPlotted, (r) => r.cost, (r) => r.score, vcNumDur, (r) => r.k)].filter((m) => !vcFront.has(m)));
 const aaFast3 = new Set([...pareto3(aaRows, (r) => r.cost, (r) => r.index, numSpeed)].filter((m) => !aaFront.has(m)));
-const tbFast3 = new Set([...pareto3(tbRows, (r) => r.cost, (r) => r.accuracy, tbNumSpeed, (r) => r.k)].filter((m) => !tbFront.has(m)));
+const tbFast3 = new Set([...pareto3(tbPlotted, (r) => r.cost, (r) => r.score, tbNumDur, (r) => r.k)].filter((m) => !tbFront.has(m)));
 const pareto2On = (rows, names, costOf, yOf, nameOf = (r) => r.model) => pareto2(rows.filter((r) => names.has(nameOf(r))), costOf, yOf, nameOf);
 const vcFast = pareto2On(vcPlotted, vcFast3, (r) => r.cost, (r) => r.score, (r) => r.k);
 const aaFast = pareto2On(aaRows, aaFast3, (r) => r.cost, (r) => r.index);
-const tbFast = pareto2On(tbRows, tbFast3, (r) => r.cost, (r) => r.accuracy, (r) => r.k);
+const tbFast = pareto2On(tbPlotted, tbFast3, (r) => r.cost, (r) => r.score, (r) => r.k);
 const vcRest = vcPlotted.filter((r) => !vcFront.has(r.k));
 const aaRest = aaRows.filter((r) => !aaFront.has(r.model));
-const tbRest = tbRows.filter((r) => !tbFront.has(r.k));
+const tbRest = tbPlotted.filter((r) => !tbFront.has(r.k));
 const vcCut = vcRest.filter((r) => !vcFast.has(r.k));
 const aaCut = aaRest.filter((r) => !aaFast.has(r.model));
-const tbCut = tbRest.filter((r) => !tbFast.has(r.k)); // tbFast 是 uid 集合，按 model 查永远 miss（曾经的 bug：worst 会算成非前沿里最贵的那个）
+const tbCut = tbRest.filter((r) => !tbFast.has(r.k));
 const vcWorst = vcCut.reduce((a, b) => (b.cost > a.cost ? b : a), vcCut[0]);
 const aaWorst = aaCut.reduce((a, b) => (b.cost > a.cost ? b : a));
 const tbWorst = tbCut.reduce((a, b) => (b.cost > a.cost ? b : a), tbCut[0]);
 const vcZone = vcPlotted.filter((r) => r.score >= 80 && r.cost <= 5);
 const aaZone = aaRows.filter((r) => r.index > 35 && r.cost < 1);
-const tbZone = tbRows.filter((r) => r.accuracy >= 40 && r.cost <= 10);
+const tbZone = tbPlotted.filter((r) => r.score >= 40 && r.cost <= 10);
 const vcFrontList = [...vcPlotted].sort((a, b) => a.cost - b.cost).filter((r) => vcFront.has(r.k));
 const aaFrontList = [...aaRows].sort((a, b) => a.cost - b.cost).filter((r) => aaFront.has(r.model));
-const tbFrontList = [...tbRows].sort((a, b) => a.cost - b.cost).filter((r) => tbFront.has(r.model));
+const tbFrontList = [...tbPlotted].sort((a, b) => a.cost - b.cost).filter((r) => tbFront.has(r.k));
 
 // ---- 跨榜重合：同一归一键（openrouter.mjs normalizeSlug）即同一模型，不再是约等于 ----
 //   VC 前沿名 → AA 同键的前沿变体（取 index 最高者展示）
@@ -190,8 +180,8 @@ const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 //   OR 无详情页的回退搜索页；见 openrouter.mjs，构建期算好注入页面） ----
 const VC_LINK = Object.fromEntries(vcRows.map((r) => [r.k, vcLink(r.model, r.org).url]));
 const AA_LINK = Object.fromEntries(aaRows.map((r) => [r.model, aaLink(r.model, r.creator).url]));
-const TB_LINK = Object.fromEntries(tbRows.map((r) => [r.model, tbLink(r.model, r.model_org).url]));
-const orMiss = [...new Set([...Object.values(VC_LINK), ...Object.values(AA_LINK)])]
+const TB_LINK = Object.fromEntries(tbRows.map((r) => [r.model, tbLink(r.model, r.org).url]));
+const orMiss = [...new Set([...Object.values(VC_LINK), ...Object.values(AA_LINK), ...Object.values(TB_LINK)])]
   .filter((u) => u.includes('/models?q='));
 if (orMiss.length) console.log('openrouter fallback(search):', orMiss.length, 'models');
 
@@ -206,7 +196,6 @@ const TM_SKIPPED = topMissing.skipped ?? [];
 // 给 unbench 行拼 OR 详情页 URL（用 provider + slug；都已在 find-top-missing 时准备好了）
 const TM_URL = (m) => `https://openrouter.ai/${m.provider.toLowerCase()}/${m.slug}${m.is_free ? ':free' : ''}`;
 if (WITH_TOP_MISSING) console.log(`top-missing: ${TM_SUCCESSORS.length} successors + ${TM_FREE.length} free + ${TM_SKIPPED.length} skipped${TM_SKIPPED.length ? ' (skipped: ' + TM_SKIPPED.map((s) => s.short_name).join(', ') + ')' : ''}`);
-const EFFORT_COLOR = { max: '#e45756', xhigh: '#4c78a8', high: '#f58518', medium: '#72b7b2' };
 
 // 解读文案不由脚本生成：LLM 读 data.json/aa-data.json/top-missing.json + 终端
 // 打印的前沿/高效区/最惨名单，自由撰写 HTML 片段后经 --obs 注入 #llm-obs
@@ -396,9 +385,9 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
   </div>
 
   <div class="card">
-    <h2>终端智能排名</h2>
+    <h2>终端智能排名（Vals AI Terminal-Bench 4.0）</h2>
     <table>
-      <thead><tr><th>Rank</th><th>Model</th><th>Agent</th><th>Effort</th><th class="num">Accuracy</th><th class="num">Cost</th><th class="num">Tokens</th><th>Released</th></tr></thead>
+      <thead><tr><th>#</th><th>Model</th><th class="num">Score</th><th class="num">Cost/Test</th><th class="num">Tokens/Test</th><th class="num">Duration</th></tr></thead>
       <tbody id="tbody-tb"></tbody>
     </table>
   </div>
@@ -414,7 +403,7 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
   <div class="card">
     <h2>CommandCode 智力 × 调用次数</h2>
     <table>
-      <thead><tr><th>#</th><th>Model</th><th class="num" title="CommandCode 自家 Intelligence 优先，取不到才用 AA 兜底">智力</th><th class="num" title="CommandCode 官方发布的每月可跑请求数（原样引用，未二次推算）">次/月</th><th class="num" title="CommandCode 官方标注的上下文窗口">Context</th></tr></thead>
+      <thead><tr><th>#</th><th>Model</th><th class="num" title="CommandCode 自家 Intelligence 优先，取不到才用 AA 兜底">智力</th><th class="num" title="CommandCode 官方发布的每月可跑请求数（原样引用，未二次推算）">次/月</th></tr></thead>
       <tbody id="tbody-plans"></tbody>
     </table>
   </div>
@@ -425,7 +414,7 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
     <div id="llm-obs">${OBS}</div>
   </div>
 
-  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.tbench.ai' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
+  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.vals.ai/benchmarks/terminal-bench-4' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
   <div class="gen-date">报告生成日期 ${GEN_DATE} · 榜单数据来自第三方公开来源，仅供学习交流，不构成选型或采购建议</div>
 </div>
 
@@ -433,7 +422,6 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
 const VC_ROWS = ${JSON.stringify(vcRows)};
 const AA_ROWS = ${JSON.stringify(aaRows)};
 const LOGO_MAP = ${JSON.stringify(LOGO_MAP)};
-const EFFORT_COLOR = ${JSON.stringify(EFFORT_COLOR)};
 const VC_SURVIVORS = new Set(${JSON.stringify([...vcFront])});
 const AA_SURVIVORS = new Set(${JSON.stringify([...aaFront])});
 const VC_FAST = new Set(${JSON.stringify([...vcFast])});
@@ -441,7 +429,7 @@ const AA_FAST = new Set(${JSON.stringify([...aaFast])});
 const VC_LINK = ${JSON.stringify(VC_LINK)};
 const AA_LINK = ${JSON.stringify(AA_LINK)};
 const TB_ROWS = ${JSON.stringify(tbRows)};
-const TB_TABLE = ${JSON.stringify(tbBest)};
+const TB_TABLE = ${JSON.stringify(tbTable)};
 const TB_SURVIVORS = new Set(${JSON.stringify([...tbFront])});
 const TB_FAST = new Set(${JSON.stringify([...tbFast])});
 const TB_LINK = ${JSON.stringify(TB_LINK)};
@@ -614,7 +602,8 @@ const tmCells = (m, numCols) => {
   }
 }
 
-// ---- TBench 表格 ----
+// ---- 终端智能表格（Vals AI Terminal-Bench 4.0，与编码榜同构：全部行按 score 降序，
+//      cost 缺失的行照常列出、Cost/Test 列显示 —；⚡ 高效 = Duration/Test 更短）----
 if (HAS_TB) {
   const tbody = document.getElementById('tbody-tb');
   const trByModel = new Map(); // 用于 unbench 插入"上一代"锚点上方
@@ -624,23 +613,22 @@ if (HAS_TB) {
     const fast = !alive && TB_FAST.has(r.k);
     const tr = document.createElement('tr');
     tr.className = alive ? 'alive' : (fast ? 'fast' : '');
-    if (fast) tr.title = '高效：能力/成本被压制但 Run 平均 tok/s 更高（更快跑完），不是真被斩';
+    if (fast) tr.title = '高效：能力/成本被压制，但 Duration / Test 更短（跑得更快），不是真被斩';
     tr.dataset.url = TB_LINK[r.model];
     tr.tabIndex = 0;
-    tr.innerHTML = \`<td>\${r.competition_rank || i + 1}</td>
+    tr.innerHTML = \`<td>\${i+1}</td>
       <td class="model">\${alive ? '🔪 ' : (fast ? '⚡ ' : '')}\${orA(r.model, TB_LINK[r.model])}\${alive ? ' <span class="tag">高性价比</span>' : (fast ? ' <span class="tag tag-fast">高效</span>' : '')}</td>
-      <td>\${r.agent}</td>
-      <td><span class="eff" style="background:\${EFFORT_COLOR[r.effort]}">\${r.effort}</span></td>
-      <td class="num">\${r.accuracy_disp || r.accuracy + '%'}</td>
-      <td class="num">\${r.cost_disp || '$' + r.total_cost_usd.toFixed(0)}</td>
-      <td class="num">\${r.display_total_tokens}</td>
-      <td>\${r.date || '—'}</td>\`;
+      <td class="num">\${r.score}%</td>
+      <td class="num">\${r.cost == null ? '—' : '$' + r.cost.toFixed(2)}</td>
+      <td class="num">\${r.tokens_disp || '—'}</td>
+      <td class="num">\${r.duration_disp || '—'}</td>\`;
     tbody.appendChild(tr);
-    trByModel.set(r.model, tr);
-    trByCanon.set(normalizeSlug(TB_LINK[r.model].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), '')), tr);
+    if (!trByModel.has(r.model)) trByModel.set(r.model, tr);
+    const canon = normalizeSlug(TB_LINK[r.model].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), ''));
+    if (!trByCanon.has(canon)) trByCanon.set(canon, tr);
   });
   if (WITH_TM) {
-    // TB 表 8 列（Rank/Model/Agent/Effort/Accuracy/Cost/Tokens/Released），DS/AA 表是 7 列。
+    // TB 表 6 列（# / Model / Score / Cost/Test / Tokens/Test / Duration），与编码表同宽。
     // 1) 上一代型：插入到对应锚点的正上方
     for (const s of TM_SUCCESSORS.filter((x) => x.predecessor.board === 'tb')) {
       const anchor = trByModel.get(s.predecessor.key) || trByCanon.get(s.predecessor.key);
@@ -651,11 +639,11 @@ if (HAS_TB) {
         tr.dataset.url = tmUrl(s);
         tr.tabIndex = 0;
         if (s.predecessor.via === 'aa-highlight-no-or') {
-          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），TB 暂缺（锚点不在 TB 表中）';
+          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vals Terminal-Bench 4.0 暂缺（锚点不在 TB 表中）';
         } else {
-          tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 TB 暂缺（推测锚点 ' + s.predecessor.key + ' 不在 TB 表中）';
+          tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 Vals Terminal-Bench 4.0 暂缺（推测锚点 ' + s.predecessor.key + ' 不在 TB 表中）';
         }
-        tr.innerHTML = tmCells(s, 8);
+        tr.innerHTML = tmCells(s, 6);
         tbody.appendChild(tr);
         continue;
       }
@@ -664,11 +652,11 @@ if (HAS_TB) {
       tr.dataset.url = tmUrl(s);
       tr.tabIndex = 0;
       if (s.predecessor.via === 'aa-highlight-no-or') {
-        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），TB 暂缺；上一代疑似「' + s.predecessor.key + '」';
+        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vals Terminal-Bench 4.0 暂缺；上一代疑似「' + s.predecessor.key + '」';
       } else {
-        tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 TBench；推测为上一代「' + s.predecessor.key + '」的后续';
+        tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 Vals Terminal-Bench 4.0；推测为上一代「' + s.predecessor.key + '」的后续';
       }
-      tr.innerHTML = tmCells(s, 8);
+      tr.innerHTML = tmCells(s, 6);
       tbody.insertBefore(tr, anchor);
     }
     // 2) 纯免费型：按 OR 排名顺序（高位先）插到最顶部
@@ -678,7 +666,7 @@ if (HAS_TB) {
       tr.dataset.url = tmUrl(f);
       tr.tabIndex = 0;
       tr.title = 'OR Top ' + f.rank + ' 免费模型（' + fmtWeekly(f.weekly_tokens) + '/周），三榜暂缺';
-      tr.innerHTML = tmCells(f, 8);
+      tr.innerHTML = tmCells(f, 6);
       tbody.insertBefore(tr, tbody.firstChild);
     }
   }
@@ -739,11 +727,10 @@ if (HAS_PLANS) {
     // 但 CommandCode 这张表**没有 Tokens/s**，快慢无从谈起，那套判据在这里没有意义，所以去掉。
     // 早期还有「折扣层」和「映射存疑」，前者是 Contributor 的旧称。
     //
-    // Contributor（Muse Spark 1.3 Contributor）是个例外，单独两个徽标：
-    //   🔪 高性价比 —— 它智力 48.1、682K 次/月，两轴都是全场最好，只因为不计入主阶梯才拿不到 front；
+    // Contributor 是个例外，单独两个徽标：
+    //   🔪 高性价比 —— 它两轴都是全场最好，只因为不计入主阶梯才拿不到 front；
     //                  不标就等于让表格里性价比最高的行看起来平平无奇。
-    //   贡献数据 —— 说明这个价格是拿数据换来的（官方表里单价约为同款常规版的 1/12～1/21～1/75），
-    //                  和「普通订阅就能拿到」不是一回事，值得在表里就提醒。
+    //   贡献数据 —— 说明这个价格是拿数据换来的，和「普通订阅就能拿到」不是一回事。
     // 🔪 前缀也跟着加：它虽然不在阶梯上，但确实是这张表里最值得买的一行。
     const pending = r.index == null;
     const good = alive || r.contributor;
@@ -758,14 +745,11 @@ if (HAS_PLANS) {
     else if (pending) bits.push(' <span class="tag tag-warn">🆕 待更新</span>');
     else if (alive) bits.push(' <span class="tag">🔪 高性价比</span>');
     if (r.contributor) bits.push(' <span class="tag">🔪 高性价比</span><span class="tag">贡献数据</span>');
-    tr.title = r.contributor
-      ? '数据换折扣档：官方表里单价约为同款常规版的 1/12（in）～1/21（out）～1/75（cache），低 1~2 个数量级（不是 5 折）。不计入 Pareto 阶梯：它智力 48.1 且 682K 次/月，计入会吃掉除 Claude Opus 5.5 外的所有阶梯点，5 步压成 2 步'
-      : '';
+    tr.title = r.contributor ? '数据换折扣档 · 不计入 Pareto 阶梯' : '';
     tr.innerHTML = \`<td>\${i+1}</td>
       <td class="model">\${good ? '🔪 ' : ''}\${orA(r.model, PLANS_LINK[r.model])}\${bits.join('')}
       <td class="num">\${pending ? '—' : r.index}</td>
-      <td class="num">\${r.free ? '不限量' : fmtK(r.requests_month)}</td>
-      <td class="num">\${r.context ?? '—'}</td>\`;
+      <td class="num">\${r.free ? '不限量' : fmtK(r.requests_month)}</td>\`;
     tbody.appendChild(tr);
   });
 }
@@ -843,13 +827,12 @@ bindTip('chart-gen', 'card-gen', 'tip-gen', (d) => {
 });
 if (HAS_TB) bindTip('chart-tb', 'card-tb', 'tip-tb', (d) => {
   const m = d.el.dataset;
-  const pct = (v) => v ? (+v * 100).toFixed(1) + '%' : '—';
-  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span><span class="tip-effort" style="background:\${EFFORT_COLOR[m.effort]}">\${m.effort}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
-    <div class="tip-row">Agent: <b>\${m.agent}</b> · TBench 4.0 Accuracy: <b>\${m.acc}%</b>\${m.ci ? ' (±' + m.ci + '%)' : ''}</div>
-    <div class="tip-row">总成本: <b>\${m.costTotal || '—'}</b> · 每任务: <b>$\${(+m.cost).toFixed(2)}</b> · Tokens: <b>\${m.tokens}</b></div>
-    <div class="tip-row">Released: <b>\${m.date || '—'}</b> · Run 均速: <b>\${m.speed ? m.speed + ' tok/s' : '—'}</b></div>
-    <div class="tip-row">pass@2: <b>\${pct(m.p2)}</b> · pass@5: <b>\${pct(m.p5)}</b></div>\`;
-});if (HAS_PLANS) bindTip('chart-plans', 'card-plans', 'tip-plans', (d) => {
+  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
+    <div class="tip-row">Terminal-Bench 4.0 Score: <b>\${m.score}%</b></div>
+    <div class="tip-row">Cost / Test: <b>$\${(+m.cost).toFixed(2)}</b></div>
+    <div class="tip-row">Tokens: <b>\${m.tokens || '—'}</b> · Duration: <b>\${m.dur || '—'}</b></div>\`;
+});
+if (HAS_PLANS) bindTip('chart-plans', 'card-plans', 'tip-plans', (d) => {
   const m = d.el.dataset;
   const tags = [];
   // 与表格同一套判定：front 来自 render-plans.mjs 的 paretoOf。zone（右上高性价比区）
@@ -882,6 +865,6 @@ writeFileSync(OUT, html);
 console.log('index.html bytes:', html.length, '→', OUT);
 console.log(`vc frontier: ${vcFront.size}/${vcPlotted.length} (plotted), zone: ${vcZone.length}, worst: ${vcWorst.model}/$${vcWorst.cost}`);
 console.log(`aa frontier: ${aaFront.size}/${aaRows.length}, zone: ${aaZone.length}, worst: ${aaWorst.model}/$${aaWorst.cost}`);
-console.log(`tb frontier: ${tbFront.size}/${tbRows.length}, zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
+console.log(`tb frontier: ${tbFront.size}/${tbPlotted.length} (plotted/${tbRows.length} rows), zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
 console.log('overlap:', overlap.length ? overlap.map(([d, a]) => `${d} = ${a}`).join('; ') : '(none)');
 if (HAS_PLANS) console.log(`plans frontier: ${plansFront.size}/${plansRows.length} (主图层, Contributor 除外), 高性价比区: ${plansZone.length}, deal layer: ${plansRows.filter((r) => r.contributor).map((r) => r.model).join(', ') || '(none)'}${plansWorst ? `, worst: ${plansWorst.model}/${plansWorst.index}` : ''}`);

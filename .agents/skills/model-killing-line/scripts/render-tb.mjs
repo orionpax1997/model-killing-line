@@ -1,22 +1,25 @@
-// render-tb.mjs — 把 tb-data.json 画成 Pareto 斩杀线 SVG（tb-chart.svg）
+// render-tb.mjs — 把 tb-data.json 画成终端智能斩杀线 SVG（tb-chart.svg）
 //
-// X = Cost per Task USD（log 轴，total_cost_usd ÷ n_trials），
-// Y = Terminal-Bench 4.0 Accuracy（%），前沿 = cost 升序 accuracy 创新高。
-// 左上角高效区（Accuracy ≥ 40 且 cost ≤ $10/任务）。
-// 效率维（3D 差集 + 次级 2D 前沿 → 标注蓝圈）用 Run 平均 token 流速
-//   speed = total_tokens ÷ (avg_trial_duration_sec × n_trials)（缺失 → -Inf 不占便宜）。
-// 结构与 render.mjs / render-aa.mjs 同构：logo 徽章内联 data URI、前沿大圆 + 碰撞感知
-// callout、透明 hit-area、data-* 属性供 gen-html.mjs 绑定 tooltip。
-// 与 AA 的区别：TB 每行还有 agent + effort（同模型在同榜有多种 effort 变体），
-//   callout 对同模型多点组加 effort 后缀（如 `GPT-6 Astra (max)`）避免标签全同名；
-//   logo 按 model_org 选（TB 模型名无品牌前缀，见 logos.mjs 的 ORG_LOGO_FILE）。
+// 数据源 = Vals AI Terminal-Bench 4.0 榜（与 Vibe Code Bench 同构），所以口径跟
+// render-vc.mjs 完全一致：
+//   X = Cost / Test USD（log 轴，页面口径：跑完一个 terminal 任务的成本），
+//   Y = Terminal-Bench 4.0 Score（%），前沿 = 按 cost 升序的 record-high score，
+//   高性价比区（Score ≥ 40 且 cost ≤ $10）。
+// 效率维 = 榜单自带的 Duration / Test（秒，越短越高效；pareto3 第三维按「越大越好」
+//   所以取负值），不自己算 tok/s、不跨榜融合。cost 缺失的行不画，只进表格。
+//
+// 一行一个模型：fetch-tb 已把同模型的多 harness run 折叠掉（当前 61 行全是
+// Mini-SWE-agent），harness / agent / effort 都不进展示面，身份键就是 model。
+// 结构上与 render-vc.mjs 同构：logo 徽章内联 data URI、前沿大圆半径按最近邻自适应、
+// 碰撞感知 callout、透明 hit-area、data-* 属性供 gen-html.mjs 绑定 tooltip。
 //
 // 用法: node scripts/render-tb.mjs [--dir <dir>] [--in <tb-data.json>] [--out <tb-chart.svg>]
 //   默认读写系统临时目录: os.tmpdir()/model-killing-line/（可用 MKL_DIR 环境变量覆盖目录）
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { logoFileOfRow, logoUriOf } from './logos.mjs';
+import { logoFileOf, logoUriOf } from './logos.mjs';
+import { tbLink } from './openrouter.mjs';
 
 const argv = (flag) => {
   const i = process.argv.indexOf(flag);
@@ -27,97 +30,104 @@ mkdirSync(DIR, { recursive: true });
 const IN = argv('--in') ?? path.join(DIR, 'tb-data.json');
 const OUT = argv('--out') ?? path.join(DIR, 'tb-chart.svg');
 
-const rows = JSON.parse(readFileSync(IN, 'utf8'));
+const allRows = JSON.parse(readFileSync(IN, 'utf8'));
+// 只画有 X 坐标的行（Vals 页面 cost 为 '-' 的行留在表格里）
+const rows = allRows.filter((r) => r.cost != null && r.cost > 0);
+const dropped = allRows.length - rows.length;
+
+// 身份键 = model（fetch-tb 已按模型折叠，一行一个模型）
+const uid = (r) => r.model;
 
 rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
-const logoInfoOf = (r) => {
-  const f = logoFileOfRow(r);
+const logoInfoOf = (m) => {
+  const f = logoFileOf(m);
   return f ? { file: f, uri: logoUriOf(f) } : null;
 };
 
-// 2D 前沿：cost 升序 accuracy 创新高（决定连线/大圆）。
-// 斩杀线用「全变体」口径：TB 同一模型在同榜有多个 effort 变体（各自独立成行），
-// 全部参与 Pareto（能看到单模型内部的 effort 性价比曲线）。页面表格则是每模型只留
-// 最佳变体的模型级视图（由 gen-html.mjs 的 tbBest 负责，这里是图上全变体口径）。
-// 前后端一致的判定维度是 uid = model+effort+agent（与 gen-html.mjs 的 tbUid 同构）。
-// fast 集（3D：cost↓ acc↑ speed↑，speed 缺失按 -Inf）差集后再取次级 2D 前沿
-// （不画线只判断）：线上才算高效（蓝圈），线下被另一个蓝色全包围 → 真被斩。
-const keyOf = (r) => `${r.model}\u0000${r.effort ?? ''}\u0000${r.agent}`;
-const numSpeed = (r) => (r.speed == null ? -Infinity : r.speed);
+// 帕累托前沿（2D：cost 升序 score 创新高，决定连线/大圆）
+// 效率维 = Duration（秒，越短越高效）。pareto3 的第三维是「越大越好」，取负号。
+const effOf = (r) => (r.duration_sec == null ? -Infinity : -r.duration_sec);
 const byCost = [...rows].sort((a, b) => a.cost - b.cost);
 const frontier = [];
 let best = -Infinity;
 for (const r of byCost) {
-  if (r.accuracy > best) { best = r.accuracy; frontier.push({ ...r }); }
+  if (r.score > best) { best = r.score; frontier.push({ ...r }); }
 }
-const frontKeys = new Set(frontier.map(keyOf));
-const fastKeys3 = new Set(rows.filter((r) => !frontKeys.has(keyOf(r)) && !rows.some((o) =>
-  o !== r && o.cost <= r.cost && o.accuracy >= r.accuracy && numSpeed(o) >= numSpeed(r) &&
-  (o.cost < r.cost || o.accuracy > r.accuracy || numSpeed(o) > numSpeed(r))
-)).map(keyOf));
-const fastKeys = new Set();
+const frontIds = new Set(frontier.map(uid));
+// fast 集：3D 差集（cost↓ score↑ duration↓）再在内部按 score×cost 取次级 2D 前沿 → 高效（蓝圈）；
+//   次级线下（被另一个蓝色在 score+cost 上全包围）的降级为真被斩，不标蓝
+const fastIds3 = new Set(rows.filter((r) => !frontIds.has(uid(r)) && !rows.some((o) =>
+  o !== r && o.cost <= r.cost && o.score >= r.score && effOf(o) >= effOf(r) &&
+  (o.cost < r.cost || o.score > r.score || effOf(o) > effOf(r))
+)).map(uid));
+const fastIds = new Set();
 {
   let b2 = -Infinity;
-  for (const r of rows.filter((r) => fastKeys3.has(keyOf(r))).sort((a, b) => a.cost - b.cost)) {
-    if (r.accuracy > b2) { b2 = r.accuracy; fastKeys.add(keyOf(r)); }
+  for (const r of rows.filter((r) => fastIds3.has(uid(r))).sort((a, b) => a.cost - b.cost)) {
+    if (r.score > b2) { b2 = r.score; fastIds.add(uid(r)); }
   }
 }
 
-// TB 模型名无括号，这里的 baseName 恒等于 model；组内同模型多个 effort 变体时
-// callout 加 ` (effort)` 后缀（frontier 上只有 1 个该模型的点时仍只显示模型名）。
-const groupCount = new Map();
-for (const f of frontier) groupCount.set(f.model, (groupCount.get(f.model) ?? 0) + 1);
-const labelOf = (f) => (groupCount.get(f.model) > 1 ? `${f.model} (${f.effort})` : f.model);
-
-const effortColor = (e) => ({ max: '#e45756', xhigh: '#4c78a8', high: '#f58518', medium: '#72b7b2' })[e] || '#888';
-const ORG_COLORS = {
-  'OpenAI': '#4c78a8', 'Anthropic': '#e45756', 'Google': '#54a24f', 'Z.ai': '#1c7ff8', 'xAI': '#555555',
-};
-const orgColor = (o) => {
-  if (ORG_COLORS[o]) return ORG_COLORS[o];
-  let h = 0;
-  for (const ch of o) h = (h * 31 + ch.codePointAt(0)) % 360;
-  return `hsl(${h},45%,45%)`;
+// 无 logo 回退字母（logoFileOf 覆盖了绝大多数模型，这里只是兜底）
+const logoOf = (m) => {
+  const s = m.toLowerCase();
+  if (s.startsWith('gpt')) return 'G';
+  if (s.startsWith('gemini')) return 'M';
+  if (s.startsWith('claude')) return 'C';
+  if (s.startsWith('muse') || s.startsWith('wonder')) return '∞';
+  if (s.startsWith('grok')) return 'X';
+  if (s.startsWith('qwen')) return 'W';
+  if (s.startsWith('glm')) return 'Z';
+  if (s.startsWith('kimi')) return 'K';
+  if (s.startsWith('deepseek')) return 'D';
+  if (s.startsWith('mimo')) return 'Mi';
+  if (s.startsWith('mistral')) return 'Ms';
+  return '●';
 };
 
 const LOGO_RING = '#487265';
-const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// 画布
-const svgW = 920, svgH = 560;
-const padL = 70, padR = 30, padT = 50, padB = 60;
+// 画布：与编码榜一致，顶部留 72px 抬头空间给前沿气泡
+const svgW = 920, svgH = 582;
+const padL = 70, padR = 30, padT = 72, padB = 60;
 
-// x: log 0.5 ~ 50（数据 $1.05 ~ $29.10）
-const niceCeil = (m) => { const s = 10 ** Math.floor(Math.log10(Math.max(m, 1e-9))); for (const i of [1, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (s * i >= m) return s * i; return s * 10; };
-const dataXs = rows.map((r) => +r.cost || 0).filter((v) => v > 0);
-const xMin = Math.min(0.5, 10 ** Math.floor(Math.log10(Math.min(...dataXs))));
-const xMax = Math.max(50, niceCeil(Math.max(...dataXs)));
+// x: log 轴，按 log 刻度阶梯自适应（数据 $0.21~$30.34 → 轴域 $0.1~$50）
+const X_LADDER = [0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
+const pickLE = (v) => { const c = X_LADDER.filter((t) => t <= v); return c.length ? c[c.length - 1] : X_LADDER[0]; };
+const pickGE = (v) => { const c = X_LADDER.filter((t) => t >= v); return c.length ? c[0] : X_LADDER[X_LADDER.length - 1]; };
+const dataXs = rows.map((r) => r.cost);
+const xMin = pickLE(Math.min(...dataXs) * 0.85);
+const xMax = pickGE(Math.max(...dataXs));
 const xScale = (v) => Math.log10(v / xMin) / Math.log10(xMax / xMin);
 const plotW = svgW - padL - padR;
 const X = (v) => padL + xScale(Math.max(v, xMin)) * plotW;
 
-// y: 0 ~ 70（数据 11.21 ~ 58.18）
-const dataYs = rows.map((r) => +r.accuracy || 0);
-const yMin = Math.min(0, Math.floor(Math.min(...dataYs) / 10) * 10);
-const yMax = Math.max(70, Math.ceil(Math.max(...dataYs) / 10) * 10);
+// y: 0 ~ 数据最高分向上扩到 5 的整数倍（+2 留出前沿大圆 R18+外圈的位置）
+// 与编码榜不同：这张榜最高分只有 65%，不设 100 的下限，否则上半张图全空。
+const dataYs = rows.map((r) => r.score);
+const yMin = Math.min(0, Math.floor(Math.min(...dataYs) / 5) * 5);
+const yMax = Math.max(70, Math.ceil((Math.max(...dataYs) + 2) / 5) * 5);
 const yScale = (v) => (v - yMin) / (yMax - yMin);
 const plotH = svgH - padT - padB;
 const Y = (v) => padT + (1 - yScale(v)) * plotH;
 
-// 高效区：Accuracy ≥ 40 且每任务成本 ≤ $10
+// 高性价比区：Score ≥ 40% 且 cost ≤ $10（沿用原 TB 榜阈值；新榜分数带上沿 65%，
+// 区内落的是 Kimi K3.1 Pro / Gemini 4 Carbon / GPT-6 Astra / GPT-6.1 Sol / Terra）
 const ZONE_COST = 10;
-const ZONE_ACC = 40;
+const ZONE_SCORE = 40;
 const zoneX = X(ZONE_COST);
-const zoneY = Y(ZONE_ACC);
+const zoneY = Y(ZONE_SCORE);
 
-const xTicks = [0.5, 1, 2.5, 5, 10, 20, 40];
-const yTicks = []; for (let t = 10; t <= yMax; t += 10) yTicks.push(t);
+const fmtTick = (t) => `$${t < 1 ? t.toFixed(2).replace(/0$/, '') : Number.isInteger(t) ? t : t.toFixed(1)}`;
+const xTicks = X_LADDER.filter((t) => t >= xMin - 1e-9 && t <= xMax + 1e-9);
+const yTicks = []; for (let t = 0; t <= yMax; t += 10) yTicks.push(t);
 
 let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" id="chart" style="font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;background:#ffffff">`;
 
 s += `<rect x="${padL}" y="${padT}" width="${zoneX - padL}" height="${zoneY - padT}" fill="#8caa5e" fill-opacity="0.10" stroke="#8caa5e" stroke-opacity="0.35" stroke-dasharray="3,3"/>`;
 s += `<text x="${padL + 8}" y="${padT + 18}" font-size="11" fill="#5b7a3a" font-weight="600">高性价比区</text>`;
-s += `<text x="${padL + 8}" y="${padT + 32}" font-size="10" fill="#5b7a3a">Accuracy ≥ ${ZONE_ACC}% &amp; Cost ≤ $${ZONE_COST}</text>`;
+s += `<text x="${padL + 8}" y="${padT + 32}" font-size="10" fill="#5b7a3a">Score ≥ ${ZONE_SCORE}% &amp; Cost ≤ $${ZONE_COST}</text>`;
 
 for (const t of xTicks) s += `<line x1="${X(t).toFixed(1)}" y1="${padT}" x2="${X(t).toFixed(1)}" y2="${padT + plotH}" stroke="#ececec" stroke-width="1"/>`;
 for (const t of yTicks) s += `<line x1="${padL}" y1="${Y(t).toFixed(1)}" x2="${padL + plotW}" y2="${Y(t).toFixed(1)}" stroke="#ececec" stroke-width="1"/>`;
@@ -127,124 +137,145 @@ s += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="
 
 for (const t of xTicks) {
   s += `<line x1="${X(t).toFixed(1)}" y1="${padT + plotH}" x2="${X(t).toFixed(1)}" y2="${padT + plotH + 5}" stroke="#444"/>`;
-  s += `<text x="${X(t).toFixed(1)}" y="${padT + plotH + 20}" text-anchor="middle" font-size="11" fill="#555">$${t}</text>`;
+  s += `<text x="${X(t).toFixed(1)}" y="${padT + plotH + 20}" text-anchor="middle" font-size="11" fill="#555">${fmtTick(t)}</text>`;
 }
 for (const t of yTicks) {
   s += `<line x1="${padL - 5}" y1="${Y(t).toFixed(1)}" x2="${padL}" y2="${Y(t).toFixed(1)}" stroke="#444"/>`;
   s += `<text x="${padL - 10}" y="${Y(t).toFixed(1) + 4}" text-anchor="end" font-size="11" fill="#555">${t}</text>`;
 }
 
-const N_TRIALS = rows[0]?.n_trials ?? 330;
-s += `<text x="${padL + plotW / 2}" y="${svgH - 14}" text-anchor="middle" font-size="12" fill="#333">每任务成本（总成本 ÷ ${N_TRIALS} 任务，USD log 轴）</text>`;
-s += `<text transform="translate(20,${padT + plotH / 2}) rotate(-90)" text-anchor="middle" font-size="12" fill="#333">Terminal-Bench 4.0 Accuracy (%)</text>`;
+s += `<text x="${padL + plotW / 2}" y="${svgH - 14}" text-anchor="middle" font-size="12" fill="#333">Cost / Test（USD，log 轴）</text>`;
+s += `<text transform="translate(20,${padT + plotH / 2}) rotate(-90)" text-anchor="middle" font-size="12" fill="#333">Terminal-Bench 4.0 Score (%)</text>`;
 
-const connectorPath = 'M' + frontier.map(f => `${X(f.cost).toFixed(1)},${Y(f.accuracy).toFixed(1)}`).join(' L');
+const connectorPath = 'M' + frontier.map(f => `${X(f.cost).toFixed(1)},${Y(f.score).toFixed(1)}`).join(' L');
 s += `<path d="${connectorPath}" fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="5,4"/>`;
 
-// 非前沿点 + 透明 hit-area
-const tbAttrs = (r, extra = {}) => {
-  const isFast = fastKeys.has(keyOf(r));
-  const info = logoInfoOf(r);
-  return {
-    isFast,
-    info,
-    attrs: `data-model="${esc(r.model)}" data-agent="${esc(r.agent)}" data-effort="${esc(r.effort ?? '')}" data-acc="${r.accuracy}" data-cost="${r.cost}" data-cost-total="${esc(r.cost_total_disp ?? '')}" data-tokens="${esc(r.display_total_tokens)}" data-date="${esc(r.date ?? '')}" data-ci="${r.accuracy_ci ?? ''}" data-speed="${r.speed ?? ''}" data-p2="${r.pass_at_2 ?? ''}" data-p5="${r.pass_at_5 ?? ''}"${isFast ? ' data-fast="1"' : ''}${info ? ` data-logo="${info.file}"` : ''}`,
-  };
-};
+const dataAttrs = (r, isFast, info) =>
+  `data-model="${esc(r.model)}" data-score="${r.score}" data-cost="${r.cost}" data-tokens="${esc(r.tokens_disp ?? '—')}" data-dur="${esc(r.duration_disp ?? '—')}"${isFast ? ' data-fast="1"' : ''}${info ? ` data-logo="${info.file}"` : ''}`;
 
+// 非前沿点
 for (const r of rows) {
-  if (frontKeys.has(keyOf(r))) continue;
-  const cx = X(r.cost), cy = Y(r.accuracy);
-  const { isFast, info, attrs } = tbAttrs(r);
+  if (frontIds.has(uid(r))) continue;
+  const cx = X(r.cost), cy = Y(r.score);
+  const info = logoInfoOf(r.model);
+  const isFast = fastIds.has(uid(r));
   const ring = isFast ? '#1971c2' : LOGO_RING;
+  const attrs = dataAttrs(r, isFast, info);
   if (info) {
-    const R = 9;
+    const R = 7;
     s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#fff" stroke="${ring}" stroke-width="${isFast ? 2 : 1.2}" ${attrs}/>`;
-    const lr = 6;
+    const lr = 4.6;
     s += `<image href="${info.uri}" x="${(cx - lr).toFixed(1)}" y="${(cy - lr).toFixed(1)}" width="${lr * 2}" height="${lr * 2}" preserveAspectRatio="xMidYMid slice" ${attrs}><title>${esc(r.model)}</title></image>`;
   } else {
-    s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${isFast ? 5 : 3.5}" fill="${orgColor(r.model_org)}" fill-opacity="0.65" stroke="${isFast ? '#1971c2' : 'none'}" stroke-width="${isFast ? 1.5 : 0}" ${attrs}/>`;
+    s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${isFast ? 4.5 : 3}" fill="${isFast ? '#1971c2' : '#888'}" fill-opacity="${isFast ? 0.9 : 0.5}" ${attrs}/>`;
   }
-  s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="12" fill="transparent" ${attrs} class="dot-hit"/>`;
+  s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10" fill="transparent" ${attrs} class="dot-hit"/>`;
 }
 
-// 前沿大圆 + callout（碰撞感知布局，同 render-aa）：同模型多点组标 ` (effort)`。
-s += `<defs><clipPath id="tb-frontier-clip"><circle r="15"/></clipPath></defs>`;
+// 前沿上每个模型只标一个 label
+const baseName = (m) => m.replace(/\s*\(.*?\)\s*/g, '').trim();
+const labeledFlags = frontier.map((f, i) =>
+  i === frontier.length - 1 || baseName(frontier[i + 1].model) !== baseName(f.model));
+
+// 前沿徽章半径按最近邻自适应：低成本段（$0.2~$2）的点挤在一起，固定 R=18 会互相盖住。
+// 圆仍画在真实坐标上（不推开）——斩杀线的语义就是真实位置。
+const FRONT_R_MAX = 18, FRONT_R_MIN = 8;
+const frontRadius = new Map();
 for (const f of frontier) {
-  const cx = X(f.cost), cy = Y(f.accuracy);
-  const R = 18;
-  const info = logoInfoOf(f);
-  s += `<g class="frontier-mark" data-model="${esc(f.model)}" data-agent="${esc(f.agent)}" data-effort="${esc(f.effort ?? '')}" data-acc="${f.accuracy}" data-cost="${f.cost}" data-cost-total="${esc(f.cost_total_disp ?? '')}" data-tokens="${esc(f.display_total_tokens)}" data-date="${esc(f.date ?? '')}" data-ci="${f.accuracy_ci ?? ''}" data-speed="${f.speed ?? ''}" data-p2="${f.pass_at_2 ?? ''}" data-p5="${f.pass_at_5 ?? ''}"${info ? ` data-logo="${info.file}"` : ''} style="cursor:pointer">`;
+  const cx = X(f.cost), cy = Y(f.score);
+  const minD = Math.min(...frontier.filter((o) => uid(o) !== uid(f))
+    .map((o) => Math.hypot(X(o.cost) - cx, Y(o.score) - cy)));
+  const r = Number.isFinite(minD) ? minD / 2 - 2 : FRONT_R_MAX;
+  frontRadius.set(uid(f), Math.max(FRONT_R_MIN, Math.min(FRONT_R_MAX, Math.round(r))));
+}
+const clipRadii = [...new Set([...frontRadius.values()].map((r) => r - 3))];
+s += `<defs>${clipRadii.map((r) => `<clipPath id="tb-frontier-clip-${r}"><circle r="${r}"/></clipPath>`).join('')}</defs>`;
+// 前沿大圆先画（label 盒子后画，保证气泡在最上层）
+for (const f of frontier) {
+  const cx = X(f.cost), cy = Y(f.score);
+  const R = frontRadius.get(uid(f));
+  const lr = R - 3;
+  const logo = logoOf(f.model);
+  const info = logoInfoOf(f.model);
+
+  s += `<g class="frontier-mark" ${dataAttrs(f, false, info)} style="cursor:pointer">`;
   if (info) {
     s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#fff" stroke="${LOGO_RING}" stroke-width="3"/>`;
-    s += `<g clip-path="url(#tb-frontier-clip)" transform="translate(${cx.toFixed(1)},${cy.toFixed(1)})"><image href="${info.uri}" x="-15" y="-15" width="30" height="30" preserveAspectRatio="xMidYMid slice"/></g>`;
+    s += `<g clip-path="url(#tb-frontier-clip-${lr})" transform="translate(${cx.toFixed(1)},${cy.toFixed(1)})"><image href="${info.uri}" x="${-lr}" y="${-lr}" width="${lr * 2}" height="${lr * 2}" preserveAspectRatio="xMidYMid slice"/></g>`;
   } else {
     s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="${LOGO_RING}" stroke="white" stroke-width="3"/>`;
-    s += `<text x="${cx.toFixed(1)}" y="${(cy + 5).toFixed(1)}" text-anchor="middle" font-size="18" font-weight="700" fill="white">●</text>`;
+    s += `<text x="${cx.toFixed(1)}" y="${(cy + R * 0.28).toFixed(1)}" text-anchor="middle" font-size="${Math.max(9, R * (logo.length > 1 ? 0.72 : 1))}" font-weight="700" fill="white">${logo}</text>`;
   }
   s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R + 5}" fill="none" stroke="${LOGO_RING}" stroke-width="1.5" opacity="0.45"/>`;
+  // 透明 hit-area：徽章缩到 R=8 时也还能稳稳 hover 到
+  s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${Math.max(14, R)}" fill="transparent"/>`;
   s += `</g>`;
 }
 
-// 同 render-aa：前沿上同模型组（多个 effort 档）只标一个 label，锚定 accuracy 最高的档
-//（frontier 沿 cost 升序 accuracy 严格递增，组内最后一个即最高档，如前沿 4 个 Astra 档只标 (max)）。
-const labeledFlags = frontier.map((f, i) =>
-  i === frontier.length - 1 || frontier[i + 1].model !== f.model);
-
-// callout 碰撞感知布局（同 render-aa.mjs）：8 候选位 × 避点/避盒；放不下则跳过该点 label
-const FRONTIER_PAD = 24;
-const DOT_PAD = 13;
+// callout 碰撞感知布局（同 render-vc）：先严格不压小圆点，再放宽允许盖背景点，
+// 但永不得压其他前沿大圆 / 已放盒子 / 高性价比区标题。
+const DOT_PAD = 8;
 const BOX_GAP = 8;
 const LABEL_CANDIDATES = [
   { dx: 0, dy: -43 }, { dx: 0, dy: 43 },
   { dx: 0, dy: -75 }, { dx: 0, dy: 75 },
-  { dx: -80, dy: -43 }, { dx: 80, dy: -43 },
-  { dx: -80, dy: 43 }, { dx: 80, dy: 43 },
+  { dx: -90, dy: -43 }, { dx: 90, dy: -43 },
+  { dx: -90, dy: 43 }, { dx: 90, dy: 43 },
+  { dx: -140, dy: -43 }, { dx: 140, dy: -43 },
+  { dx: -140, dy: 43 }, { dx: 140, dy: 43 },
 ];
-const FRONTIER_DOTS = frontier.map((f) => ({ x: X(f.cost), y: Y(f.accuracy), pad: FRONTIER_PAD, model: f.model }));
-const BG_DOTS = rows.filter((r) => !frontKeys.has(keyOf(r)))
-  .map((r) => ({ x: X(r.cost), y: Y(r.accuracy), pad: DOT_PAD, model: r.model }));
+const FRONTIER_DOTS = frontier.map((f) => ({ x: X(f.cost), y: Y(f.score), pad: frontRadius.get(uid(f)) + 6, id: uid(f) }));
+const BG_DOTS = rows.filter((r) => !frontIds.has(uid(r)))
+  .map((r) => ({ x: X(r.cost), y: Y(r.score), pad: DOT_PAD, id: uid(r) }));
 const hitsAny = (list, boxX, boxY, boxW, boxH) =>
   list.some((d) => d.x > boxX - d.pad && d.x < boxX + boxW + d.pad && d.y > boxY - d.pad && d.y < boxY + boxH + d.pad);
-const placedBoxes = [];
+const placedBoxes = [
+  { x: padL + 4, y: padT + 8, w: 118, h: 32 }, // 高性价比区的标题文字
+];
 const hitsBox = (boxX, boxY, boxW, boxH) =>
   placedBoxes.some((b) => boxX < b.x + b.w + BOX_GAP && boxX + boxW + BOX_GAP > b.x && boxY < b.y + b.h + BOX_GAP && boxY + boxH + BOX_GAP > b.y);
 let aboveFirst = true;
+const placedLabels = [];
 for (const [i, f] of frontier.entries()) {
   if (!labeledFlags[i]) continue;
-  const cx = X(f.cost), cy = Y(f.accuracy);
-  const R = 18;
-  const fullText = labelOf(f);
-  const charW = 6.2;
-  const boxW = Math.max(80, fullText.length * charW + 16);
-  const boxH = 22;
+  const cx = X(f.cost), cy = Y(f.score);
+  const R = frontRadius.get(uid(f));
+  const fullText = f.model;
+  const charW = 5.6;
+  const boxW = Math.max(72, fullText.length * charW + 14);
+  const boxH = 18;
   const ordered = [...LABEL_CANDIDATES].sort((a, b) =>
     (aboveFirst ? (a.dy < 0 ? 0 : 1) - (b.dy < 0 ? 0 : 1) : (a.dy > 0 ? 0 : 1) - (b.dy > 0 ? 0 : 1))
     || (Math.abs(a.dx) + Math.abs(a.dy) - (Math.abs(b.dx) + Math.abs(b.dy))));
   let placed = null;
-  for (const c of ordered) {
-    let boxX = cx + c.dx - boxW / 2;
-    if (boxX < 4) boxX = 4;
-    if (boxX + boxW > svgW - 4) boxX = svgW - 4 - boxW;
-    const boxY = cy + c.dy - boxH / 2;
-    if (boxY < 42 || boxY + boxH > svgH - 26) continue;
-    if (hitsAny(FRONTIER_DOTS.filter((d) => d.model !== f.model), boxX, boxY, boxW, boxH)) continue;
-    if (hitsAny(BG_DOTS, boxX, boxY, boxW, boxH)) continue;
-    if (hitsBox(boxX, boxY, boxW, boxH)) continue;
-    placed = { boxX, boxY };
-    break;
+  for (const relaxBg of [false, true]) {
+    for (const c of ordered) {
+      let boxX = cx + c.dx - boxW / 2;
+      if (boxX < 4) boxX = 4;
+      if (boxX + boxW > svgW - 4) boxX = svgW - 4 - boxW;
+      const boxY = cy + c.dy - boxH / 2;
+      if (boxY < 42 || boxY + boxH > svgH - 26) continue; // 避开顶部标题与底部轴标签
+      if (hitsAny(FRONTIER_DOTS.filter((d) => d.id !== uid(f)), boxX, boxY, boxW, boxH)) continue;
+      if (!relaxBg && hitsAny(BG_DOTS, boxX, boxY, boxW, boxH)) continue;
+      if (hitsBox(boxX, boxY, boxW, boxH)) continue;
+      placed = { boxX, boxY };
+      break;
+    }
+    if (placed) break;
   }
   aboveFirst = !aboveFirst;
   if (!placed) continue;
   const { boxX, boxY } = placed;
   placedBoxes.push({ x: boxX, y: boxY, w: boxW, h: boxH });
+  placedLabels.push(f.model);
   const above = boxY + boxH / 2 < cy;
   const targetX = Math.min(Math.max(cx, boxX), boxX + boxW);
   const targetY = above ? boxY + boxH : boxY;
   const dotY = above ? cy - R - 1 : cy + R + 1;
-  const url = f.model_url;
+  // label 文字可点 → OpenRouter 详情页（org 取自 vals 详情页路径，见 openrouter.mjs）
+  const orLink = tbLink(f.model, f.org).url;
   s += `<line x1="${cx.toFixed(1)}" y1="${dotY.toFixed(1)}" x2="${targetX.toFixed(1)}" y2="${targetY.toFixed(1)}" stroke="#888" stroke-width="0.8"/>`;
-  s += `<a href="${url}" target="_blank" rel="noopener"><rect x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="11" fill="white" stroke="#d0d0d0"/><text x="${boxX + boxW / 2}" y="${boxY + boxH / 2 + 4}" text-anchor="middle" font-size="11" fill="#333">${esc(fullText)}</text></a>`;
+  s += `<a href="${orLink}" target="_blank" rel="noopener"><rect x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="9" fill="white" stroke="#d0d0d0"/><text x="${boxX + boxW / 2}" y="${boxY + boxH / 2 + 3.5}" text-anchor="middle" font-size="10" fill="#333">${esc(fullText)}</text></a>`;
 }
 
 // legend：左上横排（标题下方第二行）
@@ -264,5 +295,8 @@ s += `<text x="${padL}" y="${22}" font-size="14" font-weight="700" fill="#222">�
 s += `</svg>`;
 writeFileSync(OUT, s);
 console.log('tb-chart.svg bytes:', s.length, '→', OUT);
-console.log('frontier points:', frontier.map(f => `${labelOf(f)}@$${f.cost}/${f.accuracy}%`).join(', '));
-console.log('efficient:', [...fastKeys].map((k) => k.split('\u0000').slice(0, 2).join('/')).join(', ') || '(none)');
+console.log(`plotted: ${rows.length}/${allRows.length}（cost 缺失 ${dropped} 行只进表格）`);
+console.log('efficient zone rect: x=', padL, '→', zoneX.toFixed(1), ', y=', padT, '→', zoneY.toFixed(1));
+console.log('frontier points:', frontier.map(f => `${f.model}@$${f.cost}/${f.score}%/${f.duration_disp}`).join(', '));
+console.log('labeled:', placedLabels.join(', '), placedLabels.length < frontier.length ? `（未放下 ${frontier.filter((f) => !placedLabels.includes(f.model)).map((f) => f.model).join(', ')}，圆点仍在，hover 看名字）` : '');
+console.log('efficient:', rows.filter((r) => fastIds.has(uid(r))).map((r) => `${r.model}/${r.duration_disp}`).join(', ') || '(none)');

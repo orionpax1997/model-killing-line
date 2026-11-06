@@ -1,13 +1,13 @@
 ---
 name: model-killing-line
-description: "Draws the 模型斩杀线 - Pareto-frontier scatters (Vibe Code Bench Score vs Cost/Test + Artificial Analysis Intelligence Index vs Cost per Task + Terminal-Bench 4.0 Accuracy vs Cost per Task + CommandCode Max 10× 智力 vs 每月可跑请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, Vibe Code / 编码能力 chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://www.vals.ai/benchmarks/vibe-code, https://artificialanalysis.ai/leaderboards/models, https://www.tbench.ai and https://commandcode.ai/docs/plans/max."
+description: "Draws the 模型斩杀线 - Pareto-frontier scatters (Vibe Code Bench Score vs Cost/Test + Artificial Analysis Intelligence Index vs Cost per Task + Vals AI Terminal-Bench 4.0 Score vs Cost/Test + CommandCode Max 10× 智力 vs 每月可跑请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, Vibe Code / 编码能力 chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://www.vals.ai/benchmarks/vibe-code, https://www.vals.ai/benchmarks/terminal-bench-4, https://artificialanalysis.ai/leaderboards/models and https://commandcode.ai/docs/plans/max."
 ---
 
 # model-killing-line
 
-Zero-argument skill. Fetches the Vals AI Vibe Code Bench leaderboard, the Artificial
-Analysis model leaderboard, (可选) the TBench / Terminal-Bench 4.0
-leaderboard, and (可选) the CommandCode Max 10× plan, computes each Pareto
+Zero-argument skill. Fetches the two Vals AI leaderboards (Vibe Code Bench +
+Terminal-Bench 4.0), the Artificial Analysis model leaderboard,
+and (可选) the CommandCode Max 10× plan, computes each Pareto
 frontier, and emits a
 single-page `index.html` with switchable sections (tab 切换，默认通用智力，
 解读常驻) — chart + table per board 由脚本生成，解读由 LLM 每次实时撰写（脚本不写解读文案）；
@@ -18,32 +18,30 @@ single-page `index.html` with switchable sections (tab 切换，默认通用智�
 - ② 编码能力斩杀线（数据源 Vals AI Vibe Code Bench，tab 文案「编码能力」）:
   X = Cost / Test USD (log axis，跑完一个完整建站任务的成本)，Y = Vibe Code Bench Score (%)，
   efficient zone = Score ≥ 80% & cost ≤ $5。**这张榜取代了原来的 DeepSWE**
-  （DeepSWE 2026-09 之后停止更新，Vibe Code Bench 2026-10-29 仍在跑）。**一行一个模型，
-  119 行全部进表格**：页面原始 123 行里 3 个模型被不同 harness 重复跑过（Claude Opus 4.8
+  （DeepSWE 2026-09 之后停止更新，Vibe Code Bench 2026-11-05 仍在跑）。**一行一个模型，
+  ~121 行全部进表格**：页面原始 ~124 行里 3 个模型被不同 harness 重复跑过（Claude Opus 4.8
   的 OpenHands/Claude Code、GPT 5.5 的 OpenHands/Factory/Codex、Claude Sonnet 4.6 的
   Claude Code/OpenHands），fetch 时折叠成「最高分那次 run」。**harness 不进任何展示面**
-  （115/123 行都是 OpenHands，没有信息量，露出来只会让同一模型出现三行像 bug）——
+  （绝大多数行都是 OpenHands，没有信息量，露出来只会让同一模型出现三行像 bug）——
   身份键就是 model，图上圈/表格徽标/tooltip 三态按它判定。页面没给 Cost 的 7 行
   （Beam 1.0 / Muse Spark / Grok Build 0.1 / Laguna M.1 / Laguna XS.2 / Nemotron 3 Ultra /
   SWE-1.6 Fast）没有 X 坐标，只进表格不进图。**效率维用榜单自带的 Duration / Test**
   （跑完一个任务要多久，越短越好；tokens÷duration 那种自算速度不用——它会奖励话痨模型，
   跟"跑得快"不是一回事）。前沿大圆半径按最近邻自适应（R = minDist/2 − 2，夹在 [8,18]），
   因为 DeepSeek 三代挤在 $0.36/$0.41/$0.58 会把固定 R=18 叠成一坨。
-- ③ 终端智能斩杀线（数据源 TBench, Terminal-Bench 4.0 官方榜, 可选）: X = Cost per Task USD
-  (log axis, total_cost_usd ÷ n_trials —— 页面 COST 列是整次 run 总成本，没有平均成本列；
-  为使 X 轴与 Vibe Code Bench 的 Cost / Test / AA 的 Cost per Task 跨榜可比，用折算的任务单价，
-  表格里则按页面口径原样展示总成本), Y = Accuracy %, efficient zone = Accuracy ≥ 40 &
-  cost ≤ $10。每行 = (模型 × agent × reasoning_effort) 的官方 run，35 行；带 tb-data.json +
-  tb-chart.svg 时 gen-html 自动启用第三个 tab；缺这两个文件则保持双榜页面不报错。
-  表格按用户要求展示**全部 effort 变体（35 行）**：按 accuracy 降序 + competition 排名（同分同号
-  跳号，如 57.88% 四行并列 2/2/2/2 后跳到 6；tbench.ai 页面默认每模型只留最佳变体，
-  即模型级 rank 1..15 含 13/13/15）、COST 统一为每任务平均花费（总成本 ÷ n_trials，与斩杀线
-  X 轴同口径；总成本按页面的 k 缩写格式仍在 tooltip 里，$3267→$3.3k）、Accuracy 带 ±CI、
-  含 Released（实为评测日期）列。**斩杀线前沿与表格同用全变体口径**：同模型同榜的多个
-  effort 档全部参与 Pareto（如 GPT-6 Astra 的 low→max 整条性价比线占住前沿），
-  表格的 alive/⚡ 标记与之三态一致（故 GLM-5.3 这类模型级 rank 5 也可能因被
-  Astra low/high 更便宜更强地压制而不在斩杀线上）。
-  效率维用 Run 平均 token 流速 total_tokens ÷ (avg_trial_duration_sec × n_trials)。
+- ③ 终端智能斩杀线（数据源 Vals AI Terminal-Bench 4.0 榜, 可选）: URL
+  https://www.vals.ai/benchmarks/terminal-bench-4，X = Cost / Test USD (log axis，页面直接给，
+  不再用 total_cost_usd ÷ n_trials 折算)、Y = Score %（Terminal-Bench 4.0 解决率），
+  efficient zone = Score ≥ 40% & cost ≤ $10。**这张榜取代了原来的 tbench.ai 官方榜**
+  （旧榜只给整次 run 的总成本、混着 agent × reasoning_effort 多档变体，X 轴要折算、表格 8 列；
+  Vals 榜与同站 Vibe Code Bench 完全同构，2026-11-05 更新，61 行，一行一个模型，
+  harness 全是 Mini-SWE-agent）。**身份键 = model**：harness / agent / effort 都不进任何
+  展示面，图上圈 / 表格徽标 / tooltip 三态都按它判定。页面没给 Cost 的 1 行（Beam 1.0）
+  没有 X 坐标，只进表格不进图。**效率维用榜单自带的 Duration / Test**（越短越好，与编码榜
+  同口径），不再用 run 平均 tok/s。带 tb-data.json + tb-chart.svg 时 gen-html 自动启用
+  第三个 tab；缺这两个文件则保持双榜页面不报错。表格 6 列：
+  `# / Model / Score / Cost/Test / Tokens/Test / Duration`，按 score 降序，全部 61 行进表
+  （Cost 缺失行显示 —）。前沿大圆半径按最近邻自适应（同编码榜）。
 - ④ CommandCode 斩杀线（数据源 CommandCode 官方文档，可选）: X = Max 10× 官方
   `Requests / month`（log 轴，向右＝更能跑），Y = 智力指数。右上方高性价比区 =
   智力 ≥ 35 且 ≥ 100K 次/月。**只做 Max 10×**——OpenCode / Pro plan 的请求数、
@@ -62,15 +60,15 @@ is auto-opened in the system default browser via `open.mjs`.
 ## The core loop (run from anywhere; outputs go to the OS temp dir)
 
 ```bash
-node .agents/skills/model-killing-line/scripts/fetch-vc.mjs            # → $TMPDIR/model-killing-line/vc-data.json (~123 rows, Vals AI Vibe Code Bench)
+node .agents/skills/model-killing-line/scripts/fetch-vc.mjs            # → $TMPDIR/model-killing-line/vc-data.json (~121 rows, Vals AI Vibe Code Bench)
 node .agents/skills/model-killing-line/scripts/fetch-aa.mjs           # → $TMPDIR/model-killing-line/aa-data.json (~62 rows, AA)
-node .agents/skills/model-killing-line/scripts/fetch-tb.mjs            # → $TMPDIR/model-killing-line/tb-data.json (35 rows, Terminal-Bench 4.0) — 可选
+node .agents/skills/model-killing-line/scripts/fetch-tb.mjs            # → $TMPDIR/model-killing-line/tb-data.json (61 rows, Vals AI Terminal-Bench 4.0) — 可选
 node .agents/skills/model-killing-line/scripts/fetch-openrouter.mjs   # → $TMPDIR/model-killing-line/or-data.json (Top 30 from OpenRouter Top Weekly, text modality) — 可选
 node .agents/skills/model-killing-line/scripts/fetch-plans.mjs         # → $TMPDIR/model-killing-line/plans-data.json (CommandCode Max 10×) — 可选
 node .agents/skills/model-killing-line/scripts/find-top-missing.mjs   # → $TMPDIR/model-killing-line/top-missing.json (OR Top 20 里没上双榜的模型) — 可选
 node .agents/skills/model-killing-line/scripts/render-vc.mjs          # → $TMPDIR/model-killing-line/vc-chart.svg (logos inlined as data URIs)
 node .agents/skills/model-killing-line/scripts/render-aa.mjs          # → $TMPDIR/model-killing-line/aa-chart.svg
-node .agents/skills/model-killing-line/scripts/render-tb.mjs          # → $TMPDIR/model-killing-line/tb-chart.svg — 可选（和 fetch-tb 成对）
+node .agents/skills/model-killing-line/scripts/render-tb.mjs          # → $TMPDIR/model-killing-line/tb-chart.svg — 可选（和 fetch-tb 成对，结构与 render-vc 同构）
 node .agents/skills/model-killing-line/scripts/render-plans.mjs       # → $TMPDIR/model-killing-line/plans-chart.svg — 可选（和 fetch-plans 成对）
 node .agents/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；存在 tb-data.json + tb-chart.svg 时自动加「终端智能」tab，存在 plans-data.json + plans-chart.svg 时再自动加「CommandCode」tab；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
 # LLM 看完本轮数据后自由撰写解读 HTML 片段，存文件后注入：
@@ -131,24 +129,23 @@ see below. The scripts read/write via cwd and need only node stdlib.
   y 刻度随之生成到新上界；
   zone Index > 35 & < $1, `data-creator` / `data-index` 属性,
   same-base-name single label + collision-aware callouts, efficient 高效点描蓝圈同上）。
-- `fetch-tb.mjs`: GETs https://www.tbench.ai/ (Terminal-Bench 4.0 官方榜) 首页 SSR
-  HTML，解析内联的 Next.js RSC flight payload（`{"leaderboard":{...},"rows":[...]}`，
-  无公开 JSON API；RSC 以哨兵引号结束且尾括号不属于 JSON，解析正则见文件头）。
-  每行 = `{rank, model, agent, effort, accuracy, accuracy_ci, accuracy_disp(页面 "58.2% ± 2.8%"),
-  cost(每任务 = total_cost_usd÷n_trials), total_cost_usd, cost_disp(每任务平均花费, 表格 Cost 列),
-  cost_total_disp(总成本, 页面 k 缩写 "$3.3k", tooltip 用), display_total_tokens, date(页面 Released),
-  avg_trial_duration_sec, pass_at_2/5, speed(run 平均 tok/s, 缺失 null),
-  model_url/agent_url, model_org/agent_org}`。
-  Throws when zero rows parse（页面改版时重新检查 RSC payload 结构）。
-- `render-tb.mjs`: same structure as `render-vc.mjs`/`render-aa.mjs` but for TBench data
-  (log x 0.5~50, y 0~70, zone Accuracy ≥ 40 & cost ≤ $10, `data-agent`/`data-effort`/
-  `data-acc`/`data-tokens`/`data-p2`/`data-p5` attributes + run 平均 tok/s 效率维)。
-  效率维用自身 speed（不跨榜融合），3D 差集 + 次级 2D 前沿 → 高效蓝圈同 AA。
-  前沿判定用全变体口径（所有 effort 档参与）。callout 用 AA 同款策略：同模型组
-  （多个 effort 档）在前沿上**只标一个气泡**，锚定 accuracy 最高的档（如 GPT-6 Astra (max)），
-  其余档只画圆点不弹气泡——避免 4 个 Astra 气泡挤在 y≈50-58 区互相避让后压住旁边点；
-  前后端统一用 uid = model+effort+agent 判定（图上/表格/tooltip 三态一致）。
-  logo 按 model_org 选（TB 模型名无品牌前缀，见 logos.mjs 的 ORG_LOGO_FILE）。
+- `fetch-tb.mjs`: GETs https://www.vals.ai/benchmarks/terminal-bench-4 的 Astro SSR
+  HTML，解析 `<table aria-labelledby="benchmark-leaderboard-title">`（与 fetch-vc 完全同构，
+  列：Rank / Model+详情页 href / Harness / Score / Cost / Test / Tokens / Test / Duration / Test；
+  页面无公开 JSON API，表格是唯一稳定来源）。每行 =
+  `{rank, model, harness(仅留档不展示), runs, score, cost(缺失 null), tokens, tokens_disp,
+  duration_sec, duration_disp, org, slug, url}`；同模型多 harness 折叠为最高分那次
+  （当前 61 行全是 Mini-SWE-agent，这一步是空操作）。页面顶部 `Updated MM/DD/YYYY`
+  打印到控制台。Throws when zero rows parse（页面改版时先看文件头的列约定）。
+- `render-tb.mjs`: 与 `render-vc.mjs` 同构（log x 轴 `X_LADDER` 阶梯自适应、y 上界按
+  数据扩到 5 的倍数、碰撞感知 callout、透明 hit-area、前沿大圆半径按最近邻自适应），
+  但标题 / 轴文案是 Terminal-Bench 4.0，zone = Score ≥ 40 & Cost ≤ $10，
+  y 轴**不设 100 下限**（当前数据最高 65.15 → 上界 70，否则上半张图全空）。
+  `data-model`/`data-score`/`data-cost`/`data-tokens`/`data-dur` 属性 +
+  Duration / Test 效率维；3D 差集 + 次级 2D 前沿 → 高效蓝圈同 VC。
+  身份键 = model（图上 / 表格 / tooltip 三态一致）。logo 按模型名前缀选
+  （Vals 名字带品牌前缀，见 logos.mjs 的 `logoFileOf`），链接用
+  `tbLink(model, org)`（= `vcLink` 别名）。
 - `fetch-plans.mjs`: GETs `https://commandcode.ai/docs/plans/max`（官方
   `Requests / 5 hours / week / month` 请求表 + 价格表）和
   `https://commandcode.ai/docs/plans/pro`（CommandCode 自家的 `Intelligence` 列，
@@ -162,20 +159,22 @@ see below. The scripts read/write via cwd and need only node stdlib.
   从 off-peak 拉细连线，Contributor 用橙色虚线大圈 + 两行标注。
 
 三维语义（能力 × 成本 × 效率）：2D 前沿（绿，🔪高性价比）只看能力+成本；
-效率维三张榜各自用自家的时间口径（Vibe Code Bench = **Duration / Test**，AA = 自带 Tokens/s，
-TB = run 平均 tok/s），**不再做跟 AA 融合的复合效率**（DeepSWE 的 steps 口径随榜一起下线了）。
+效率维三张散点榜各自用自家的时间口径（Vibe Code Bench = **Duration / Test**，
+Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；CommandCode 无效率维），
+**不再做跟 AA 融合的复合效率**（DeepSWE 的 steps 与旧 TBench 的 run 平均 tok/s 都随换源下线了）。
 叠加效率后仍无人能全包围的，再在内部按能力×成本取一次次级 2D 前沿
 （不画线只判断）：线上才算高效（蓝，⚡），次级线下
 （被另一个蓝色全包围）降级真被斩。剩下才是真被斩（无色）。
 表格行/图上圈/tooltip/解读全部三态一致；`worst` 只从真被斩里取。
-编码表列：`# / Model / Score / Cost/Test / Tokens/Test / Duration`
-（Cost 缺失行显示 —，但仍然列在表里；不设 Harness 列，也不设 Tokens/s 列——效率看
-Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨榜重合用 `normalizeSlug` 作归一键直接比
+编码表 / 终端表同宽 6 列：`# / Model / Score / Cost/Test / Tokens/Test / Duration`
+（Cost 缺失行显示 —，但仍然列在表里；两张 Vals 榜都不设 Harness 列，也不设 Tokens/s 列——
+效率看 Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨榜重合用 `normalizeSlug` 作归一键直接比
 （不再经过 fuse.mjs）。
 - `openrouter.mjs`: 模型名归一化 + OpenRouter 详情页链接（`normalizeSlug` 去括号
   effort 后缀 → 小写 hyphen slug；`aaLink(model, creator)` 按 AA 的 Creator 列定 org，
   `vcLink(model, org)` 按 Vals 详情页路径里的 org 前缀定 org（`VALS_ORG_TO_OR`），
-  `tbLink` = `aaLink`，`dsLink` 只剩 CommandCode 那张表在用；个例进 `SLUG_OVERRIDE`，
+  `tbLink` = `vcLink`（两张 Vals 榜同站同源，都按详情页 `/models/<org>_<slug>` 定 org；
+  旧 tbench.ai 榜用的是 Creator 列 + `aaLink`，已随换源下线），`dsLink` 只剩 CommandCode 那张表在用；个例进 `SLUG_OVERRIDE`，
   OR 无详情页的进 `SEARCH_ONLY` 回退搜索页）。新增模型先 curl 验 title 非软 404
   再进映射（Vibe Code Bench 那批是用 https://openrouter.ai/api/v1/models 的
   id 清单逐个核对的，19 个已下架/未上 OR 的老模型会走搜索页）。
@@ -247,7 +246,7 @@ Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨�
   `<div id="llm-obs">`（或等价占位），不写任何分析文字。
 - 每次跑完管线后，由 LLM（调用本 skill 的 agent）在本轮对话里实时自由撰写解读：
   打开 `index.html`（或直接读 `$TMPDIR/model-killing-line/` 下的
-  `vc-data.json` / `aa-data.json` / `top-missing.json` + 终端输出的前沿名单），
+  `vc-data.json` / `tb-data.json` / `aa-data.json` / `top-missing.json` + 终端输出的前沿名单），
   看完本轮数据后自由发挥，写成 HTML 片段（可用 `<ul class="obs">` + `<li>`，
   模型名想链 OpenRouter 可用页面内联的链接，样式类 `.obs a` 已就绪），存文件后用
   `gen-html.mjs --obs <文件>` 注入 `#llm-obs`，再展示/截图给用户。
@@ -259,8 +258,8 @@ Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨�
 每次撰写解读前必须把以下五条原则作为强制上下文阅读，不能跳过：
 
 1. **推荐一律从 AA 榜选，📌 太长不看也不例外**。四榜数据时效不一致：AA Intelligence
-   Index 每日更新，是唯一有"最新信号"的源；编码榜（Vibe Code Bench，数周）和
-   TBench 4.0（终端智能，数月）重评测成本高，实测档往往比当下新一代落后一代。
+   Index 每日更新，是唯一有"最新信号"的源；Vals 的两张榜（Vibe Code Bench /
+   Terminal-Bench 4.0，数周一次重测）虽然现在同频更新，仍是快照，不适合给新代模型定档。
    **📌 太长不看的三个选择（成本优先 / 效率优先 / 能力优先）必须全部取自 AA 榜**
    （AA 的 Index + Cost per Task + Tokens/s 三个字段就够定档），并在括号里标注
    编码榜 / TB 的实测档作为佐证（"编码榜实测 88.9%"），而不是用编码榜 / TB 的数字当
@@ -286,9 +285,10 @@ Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨�
    `frontier points` / `efficient` / `zone` 名单，解读里的 🔪 / ⚡ / 📊 说法必须与那
    三个名单一致。已踩过的坑：**AA 榜的 2D 前沿与 ⚡ 高效圈交集常常为空**（前沿只看
    能力×成本，⚡ 是 3D 差集），所以"某点在前沿上又套着 ⚡"这种话要先把两个名字
-   都在两份名单里查到才能写；查不到就只写其中一个。同理编码榜的 ⚡ 是**榜单自带的
-   Duration / Test 更短**（不是 AA 的 Tokens/s，不是 token 吞吐，也不是「单位成本产出」），
-   拿 AA speed 解释编码榜的 ⚡ 会错：跑得快 ≠ 输出得多，话痨模型 tok/s 高但更慢。
+   都在两份名单里查到才能写；查不到就只写其中一个。同理编码榜 / 终端榜的 ⚡ 都是
+   **榜单自带的 Duration / Test 更短**（不是 AA 的 Tokens/s，不是 token 吞吐，也不是
+   「单位成本产出」），拿 AA speed 解释它们的 ⚡ 会错：跑得快 ≠ 输出得多，
+   话痨模型 tok/s 高但更慢。
 
 不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
 缺测"说成"不推荐"；用编码榜/TB 的缺测率来评价 AA 上的高 Index 模型；**用编码榜 / TB 的
@@ -365,27 +365,33 @@ Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨�
   （x 上限 $5、y 下限 80%）。x 轴按 `X_LADDER` 阶梯自适应（当前数据 $0.07~$57.92 →
   轴域 $0.05~$100），y 轴 `0 ~ max(100, 数据 max+2 扩到 5 的倍数)`。
 - render-aa.mjs: `ZONE_COST` / `ZONE_INDEX` (`1` / `35`).
-- render-tb.mjs: `ZONE_COST` / `ZONE_ACC` (`10` / `40`), `xMin`/`xMax` (`0.5`/`50`),
-  `yMin`/`yMax` (`0`/`70`): TBench efficient-zone rectangle + axis ranges.
+- render-tb.mjs: `ZONE_COST` / `ZONE_SCORE` (`10` / `40`): Vals Terminal-Bench 4.0
+  高性价比区（x 上限 $10、y 下限 40%）。x 轴同 render-vc 的 `X_LADDER` 阶梯自适应
+  （当前数据 $0.21~$30.34 → 轴域 $0.1~$50），y 轴 `0 ~ max(70, 数据 max+2 扩到 5 的倍数)`
+  （不设 100 下限，分数带上沿只有 65%，否则上半张图全空）。
 - `LOGO_RING` (`#487265`): uniform green ring around all logo badges
-  (frontier + dots + tooltip); effort colors are no longer used for rings.
-  `effortColor()` is kept only for the no-logo fallback dots.
+  (frontier + dots + tooltip); effort colors are no longer used anywhere
+  （换源后 TB 不再有 effort 变体，旧 `effortColor()` 已删除）。
 
 ## Completion criteria
 
-- `fetch-vc.mjs` prints `rows: ~119 (cost 缺失 ~7 行…)` + `updated: MM/DD/YYYY`，多 harness 折叠
+- `fetch-vc.mjs` prints `rows: ~121 (cost 缺失 ~7 行…)` + `updated: MM/DD/YYYY`，多 harness 折叠
   只在有折叠时多打一行 `多 harness 折叠（保留最高分 run）: …`（当前 3 个模型）。
   行数或 cost 缺失数的量级变了 = Vals 页面改版（列顺序 / 表格容器），先看文件头
   的列约定再改。`updated` 太久没动说明这个榜也开始停更了，要在解读里说清楚。
-- `fetch-aa.mjs` prints `trs: ~277, kept: ~62`. `kept` drifting means the
+- `fetch-aa.mjs` prints `trs: ~282, kept: ~67`. `kept` drifting means the
   table markup or filter yield changed — inspect before continuing.
-- `fetch-tb.mjs` prints `rows: ~35`（Terminal-Bench 4.0）。任何其它数目说明
-  leaderboard 形状变了 — 重新检查 RSC payload 解析。
+- `fetch-tb.mjs` prints `rows: ~61 (cost 缺失 1 行…)` + `updated: MM/DD/YYYY`
+  （Vals Terminal-Bench 4.0）。行数或 cost 缺失数的量级变了 = Vals 页面改版
+  （列顺序 / 表格容器）— 重新检查文件头的列约定。
+- `render-tb.mjs` prints frontier points + `labeled:` + `efficient:`；前沿数按 model 计
+  一行一个模型，`efficient:` 里的名字必须能在 TB 表格里找到对应行（三态一致）。
 - `render-vc.mjs` prints frontier points + `labeled:` + `efficient:`；前沿数必须等于
   Pareto-optimal 行数（按 model 计，一行一个模型），`labeled:` 里若出现「未放下 …」说明
   气泡位置不够，圆点仍在（hover 可看名字），可考虑再加大 padT 或补候选位。
 - Hovering any dot in `index.html` shows a card with that dot's lab logo,
-  model name, score, cost and tokens/duration（没有 harness、没有 tok/s）。
+  model name, score, cost and tokens/duration（编码 / 终端两张 Vals 榜都没有 harness、
+  agent、effort、tok/s；终端榜的 tooltip 标题写 Terminal-Bench 4.0 Score）。
 - `logos/` (27 files, ~464KB, designarena `model-logos`, resized to 128px)
   ships with the skill and is inlined at build time; nothing is copied to
   the output dir. Logo mapping lives in `logoFileOf()` in

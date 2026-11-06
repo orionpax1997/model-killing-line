@@ -36,7 +36,7 @@ const OUT = (() => {
 const orRows = JSON.parse(readFileSync(path.join(DIR, 'or-data.json'), 'utf8'));
 const vcRows = JSON.parse(readFileSync(path.join(DIR, 'vc-data.json'), 'utf8'));
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
-// TBench 3.0 独立成榜，可选：缺失时跳过 TB 维度（仅输出 VC/AA successors/free）。
+// 终端智能榜（Vals AI Terminal-Bench 4.0）独立成榜，可选：缺失时跳过 TB 维度（仅输出 VC/AA successors/free）。
 const tbRows = existsSync(path.join(DIR, 'tb-data.json'))
   ? JSON.parse(readFileSync(path.join(DIR, 'tb-data.json'), 'utf8'))
   : [];
@@ -119,30 +119,22 @@ const vcHas = (slug) => {
 // findPredecessor 中间选 cand 时也要按 alias 集判断（这样 hy4 末位 -1 后能在 AA
 // 里找到 DeepSeek V4 Pro 那种 VC alias 是 deepseek-v4-pro-0813 的 row）。
 const aaFind = (slug) => aaByCanon.get(slug) ?? null;
-// TBench 同理：按 canon key 查表，返回首个匹配 row（可能有多个 effort/agent 变体）。
-const tbByCanon = new Map();
+// 终端智能榜（Vals AI Terminal-Bench 4.0）与编码榜同源同构：模型名是品牌全名
+// （`Claude Opus 5.5` / `GPT-6.1 Sol`），org 取自 Vals 详情页路径，一行一个模型。
+// 旧 tbench.ai 榜的名字不带品牌前缀，那时需要「后缀别名」才能对上 AA canon；换源后
+// 不再需要，直接用 tbLink(=vcLink) 的 finalSlug 展开 alias 集合（SLUG_OVERRIDE 兜底）。
+const tbSlugAliases = (model, org) => {
+  const finalSlug = tbLink(model, org).slug;
+  return new Set([normalizeSlug(model), finalSlug]);
+};
+const tbAliasToModel = new Map();
 for (const r of tbRows) {
-  const k = normalizeSlug(r.model);
-  if (!tbByCanon.has(k)) tbByCanon.set(k, r);
-}
-// TBench 的 model 名常常没有品牌前缀（TB `Opus 5.5` vs AA `Claude Opus 5.5`、
-// TB `Sonnet 5.5` vs AA `Claude Sonnet 5.5`），直接按 AA canon 查表会漏命中，
-// 于是把已经在 TB 上的模型误报成「TB 暂缺」并在表底插一条 🆕 行——而它其实是 TB 榜一。
-// 所以除精确 canon 外再建一层「后缀别名」：查询 canon 以某条 TB canon 结尾即视为同一模型
-// （claude-opus-5-5 → opus-5-5）。按长度倒序扫，优先匹配更长的 TB canon。
-const tbCanonByLen = [...tbByCanon.keys()].sort((a, b) => b.length - a.length);
-const tbCanonAlias = (slug) => {
-  if (tbByCanon.has(slug)) return slug;
-  for (const c of tbCanonByLen) {
-    if (slug.endsWith('-' + c)) return c;
+  for (const a of tbSlugAliases(r.model, r.org)) {
+    if (!tbAliasToModel.has(a)) tbAliasToModel.set(a, r.model);
   }
-  return null;
-};
-const tbHas = (slug) => tbCanonAlias(slug) !== null;
-const tbFind = (slug) => {
-  const k = tbCanonAlias(slug);
-  return k ? tbByCanon.get(k) : null;
-};
+}
+const tbHas = (slug) => tbAliasToModel.has(slug);
+const tbFind = (slug) => tbAliasToModel.get(slug) ?? null;
 
 // strip 启发式：从一个 OR slug 派生一组"可能的上一代"候选 slug（按优先级）。
 const TRAILING_TOKENS = [
@@ -196,7 +188,7 @@ const findPredecessor = (slug, onlyBoard) => {
     }
     if (onlyBoard !== 'vc' && onlyBoard !== 'aa') {
       const tb = tbFind(cand);
-      if (tb) return { board: 'tb', key: tb.model };
+      if (tb) return { board: 'tb', key: tb };
     }
   }
   return null;

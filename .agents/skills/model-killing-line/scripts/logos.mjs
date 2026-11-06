@@ -39,8 +39,10 @@ export const logoFileOf = (m) => {
   return null;
 };
 
-// TBench 榜的模型名不带品牌前缀（`Fable 5.1` / `Opus 5` / `GLM-5.3`…），
-// 但有 model_org 列——按 org 选 logo 更可靠；DS/AA 行没有 model_org，回退到上方前缀匹配。
+// 旧 tbench.ai 榜的模型名不带品牌前缀（`Fable 5.1` / `Opus 5`…），但有 model_org 列，
+// 那时按 org 选 logo 更可靠。换源到 Vals AI Terminal-Bench 4.0 后，四张榜的行都
+// 没有 model_org 了（Vals 名字带品牌前缀），这张表只剩历史兼容作用，
+// logoFileOfRow() 会一律回退到上方的前缀匹配。
 export const ORG_LOGO_FILE = Object.freeze({
   'OpenAI': 'chatgptlogo.png',
   'Anthropic': 'anthropic-1.svg',
@@ -49,7 +51,7 @@ export const ORG_LOGO_FILE = Object.freeze({
   'xAI': 'grokLogoTransparent.svg',
 });
 
-/** 榜单行 → logo 文件名：有 model_org 先用 org 映射，否则按模型名前缀匹配 */
+/** 榜单行 → logo 文件名：有 model_org（旧 TBench 数据）先用 org 映射，否则按模型名前缀匹配 */
 export const logoFileOfRow = (row) =>
   (row.model_org && ORG_LOGO_FILE[row.model_org]) || logoFileOf(row.model);
 

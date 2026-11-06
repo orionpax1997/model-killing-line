@@ -93,8 +93,8 @@ if (rows.length === 0) {
   throw new Error('no leaderboard rows parsed — page markup likely changed, re-inspect the <table> block');
 }
 
-// 页面顶部的 "Updated 10/29/2026" 文案
-const updated = html.match(/Updated\s+(\d{2}\/\d{2}\/\d{4})/)?.[1] ?? null;
+// 页面顶部的 "Updated 10/29/2026" / "Updated 11/5/2026" 文案（月/日可能是一位）
+const updated = html.match(/Updated\s+(\d{1,2}\/\d{1,2}\/\d{4})/)?.[1] ?? null;
 
 // 一行一个模型：Vals 会把同一模型挂在不同 harness 下重复上榜（Claude Opus 4.8 的
 //   OpenHands / Claude Code、GPT 5.5 的 OpenHands / Factory / Codex），而 115/123 行都是
