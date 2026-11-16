@@ -59,6 +59,13 @@ const PREFIX_TO_ORG = [
   ['hy3', 'tencent'],
   ['inkling', 'thinkingmachines'],
   ['nemotron', 'nvidia'],
+  // OpenCode Go 榜的模型名是「品牌 + 空格」写法（`LongCat-2.0` / `Hy4` / `Step 5 Preview`），
+  // 上面那批 `gpt-` / `mimo-` 连写前缀匹配不到——dsLink 会先把空格压成 `-` 再匹配，
+  // 所以这里补的是「归一化之后」的前缀。
+  ['longcat', 'meituan'],
+  ['hy3', 'tencent'],
+  ['hy4', 'tencent'],
+  ['step-', 'stepfun'],
 ];
 
 // 归一化后仍与 OR 实际 slug 有出入的个例（curl 验证过右侧 200 且 title 正常）
@@ -146,9 +153,11 @@ export const vcLink = (model, org) => {
  *  统一按 Vals org 前缀拼链接。 */
 export const tbLink = vcLink;
 
-/** DeepSWE 行：dsLink(model)，如 'gemini-3.8-flash' → google/gemini-3.8-flash */
+/** 订阅套餐类行（CommandCode / OpenCode Go）：dsLink(model)，如 'gemini-3.8-flash' → google/gemini-3.8-flash
+ *  先把空格/下划线压成连字符再匹配前缀：OpenCode 写 `GPT 6 Luna` / `MiMo-V2.6-Flash`，
+ *  不归一化会漏掉 `gpt-`（名字里是空格）这一整批，表现为「同一模型在 AA tab 有详情页、在 OpenCode tab 只有搜索页」。 */
 export const dsLink = (model) => {
-  const s = model.toLowerCase();
+  const s = model.toLowerCase().replace(/[\s_]+/g, '-');
   const org = (PREFIX_TO_ORG.find(([p]) => s.startsWith(p)) ?? [])[1] ?? null;
   return build(model, normalizeSlug(model), org);
 };

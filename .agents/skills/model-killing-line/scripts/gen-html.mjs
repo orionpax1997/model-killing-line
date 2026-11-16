@@ -11,6 +11,11 @@
 // 终端智能榜（Vals AI Terminal-Bench 4.0）与它同源同构，同样一行一个模型、6 列表格、
 //   Duration / Test 当效率维；只是 Y 叫 Score、zone 阈值 40%/$10。
 //
+// 两张「订阅套餐」榜（CommandCode Max 10× / OpenCode Go）是同一种形态：X = 每月可跑请求数
+//   （log 轴，向右＝更能跑），Y = 智力，表格 4 列（# / Model / 智力 / 次月），🔪 徽标 = 在
+//   右上 Pareto 阶梯上。两者共用 renderCallTable()（族分块 / 免费置顶 / 待更新排序 / 徽标一套
+//   代码），差异只有「待更新的 Contributor 给不给 🔪」（dealBadgeAlways）和链接来源。
+//
 // 可选：--with-top-missing（或 MKL_INCLUDE_TOP_MISSING=1）会把 OpenRouter Top 20 里
 //   "用了但还没上双榜"的模型嵌进表格：
 //   - 「上一代」型（hy4-preview / deepseek-v4-flash-0423 / muse-spark-1.3-contributor / ...）：
@@ -54,6 +59,9 @@ if (!HAS_TB) console.log('Vals TB: tb-data.json/tb-chart.svg 未找到，跳过�
 // CommandCode 榜（Max 10× 每月可跑请求数 × AA Index）第四个榜为可选：plans-data.json + plans-chart.svg
 const HAS_PLANS = existsSync(path.join(DIR, 'plans-data.json')) && existsSync(path.join(DIR, 'plans-chart.svg'));
 if (!HAS_PLANS) console.log('Plans: plans-data.json/plans-chart.svg 未找到，跳过「CommandCode」榜（跑 fetch-plans → render-plans 可启用）');
+// OpenCode Go 榜（Go $10/月 官方估算请求数 × AA Index）第五个榜为可选：go-data.json + go-chart.svg
+const HAS_GO = existsSync(path.join(DIR, 'go-data.json')) && existsSync(path.join(DIR, 'go-chart.svg'));
+if (!HAS_GO) console.log('Go: go-data.json/go-chart.svg 未找到，跳过「OpenCode Go」榜（跑 fetch-go → render-go 可启用）');
 
 // 编码榜身份键 = model（一行一个模型；harness 已在 fetch-vc 折叠掉）
 const vcUid = (r) => r.model;
@@ -61,6 +69,8 @@ const vcRows = JSON.parse(readFileSync(path.join(DIR, 'vc-data.json'), 'utf8')).
 const aaRows = JSON.parse(readFileSync(path.join(DIR, 'aa-data.json'), 'utf8'));
 const plansData = HAS_PLANS ? JSON.parse(readFileSync(path.join(DIR, 'plans-data.json'), 'utf8')) : null;
 const plansRows = plansData?.rows ?? [];
+const goData = HAS_GO ? JSON.parse(readFileSync(path.join(DIR, 'go-data.json'), 'utf8')) : null;
+const goRows = goData?.rows ?? [];
 
 rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
 
@@ -124,6 +134,23 @@ const plansZone = plansRows.filter((r) => r.index >= 35 && r.requests_month >= 1
 const plansWorst = plansRows
   .filter((r) => !plansFront.has(r.model) && !r.contributor)
   .reduce((a, b) => (a && a.index <= b.index && a.requests_month <= b.requests_month ? a : b), null);
+// OpenCode Go 榜：X = 官方估算 Requests / month（log 轴，向右＝更能跑），Y = 智力（AA 单源）。
+// 与 CommandCode 榜同构（同一套 Pareto 阶梯 / 4 列表格 / 右上高性价比区），差别只在口径：
+// 请求数是官方**估算**（按典型用法的 token 画像）、只做 Go 一档、Y 不混 CommandCode 的分。
+// MIN_STEP 必须和 render-go.mjs 的 paretoOf 保持一致，否则表格的 🔪 会和图上的阶梯对不上。
+const GO_MIN_STEP = 0.5;
+const goFrontNames = (() => {
+  const names = new Set();
+  let best = -Infinity;
+  for (const r of [...goRows.filter((x) => !x.contributor)].sort((a, b) => (b.requests_month ?? -1) - (a.requests_month ?? -1))) {
+    // 必须跳过 index/requests 缺失的行（免费档 requests=null；JS 里 null 会被当成 0 参与比较）
+    if (r.index == null || r.requests_month == null) continue;
+    if (r.index >= best + GO_MIN_STEP) { best = r.index; names.add(r.model); }
+  }
+  return names;
+})();
+const goFront = new Set(goFrontNames);
+const goZone = goRows.filter((r) => r.index != null && r.requests_month != null && r.index >= 27 && r.requests_month >= 100000);
 // 编码榜效率维 = 榜单自带的真速度 tokens ÷ duration（与 render-vc.mjs 同源，不跨榜融合）
 // 效率维 = Duration / Test（秒，越短越高效）；pareto3 第三维按「越大越好」，故取负号
 const vcNumDur = (r) => (r.duration_sec == null ? -Infinity : -r.duration_sec);
@@ -171,8 +198,9 @@ const vcSvg = prepSvg('vc-chart.svg', 'chart-code');
 const aaSvg = prepSvg('aa-chart.svg', 'chart-gen');
 const tbSvg = HAS_TB ? prepSvg('tb-chart.svg', 'chart-tb') : '';
 const plansSvg = HAS_PLANS ? prepSvg('plans-chart.svg', 'chart-plans') : '';
+const goSvg = HAS_GO ? prepSvg('go-chart.svg', 'chart-go') : '';
 
-const usedFiles = [...new Set([...vcRows, ...aaRows, ...tbRows, ...plansRows]
+const usedFiles = [...new Set([...vcRows, ...aaRows, ...tbRows, ...plansRows, ...goRows]
   .map((r) => logoFileOfRow(r) ?? (r.aa_model ? logoFileOf(r.aa_model) : null)).filter(Boolean))];
 const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 
@@ -181,7 +209,10 @@ const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 const VC_LINK = Object.fromEntries(vcRows.map((r) => [r.k, vcLink(r.model, r.org).url]));
 const AA_LINK = Object.fromEntries(aaRows.map((r) => [r.model, aaLink(r.model, r.creator).url]));
 const TB_LINK = Object.fromEntries(tbRows.map((r) => [r.model, tbLink(r.model, r.org).url]));
-const orMiss = [...new Set([...Object.values(VC_LINK), ...Object.values(AA_LINK), ...Object.values(TB_LINK)])]
+// OpenCode Go 榜：peak/off-peak 孪生名带后缀，拼链接前先剥掉（否则同一款模型两个点指向两个 URL）
+const GO_BASE = (m) => String(m).replace(/\s*\((?:off-)?peak\)$/i, '');
+const GO_LINK = Object.fromEntries(goRows.map((r) => [r.model, dsLink(GO_BASE(r.model)).url]));
+const orMiss = [...new Set([...Object.values(VC_LINK), ...Object.values(AA_LINK), ...Object.values(TB_LINK), ...Object.values(GO_LINK)])]
   .filter((u) => u.includes('/models?q='));
 if (orMiss.length) console.log('openrouter fallback(search):', orMiss.length, 'models');
 
@@ -237,7 +268,7 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>模型斩杀线：通用智力 × 编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</title>
+<title>模型斩杀线：通用智力 × 编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}${HAS_GO ? ' × OpenCode Go' : ''}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #fafafa; color: #222; }
@@ -336,15 +367,16 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
 </head>
 <body>
 <div class="wrap">
-  <h1>🔪 模型斩杀线：通用智力 × 编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}</h1>
+  <h1>🔪 模型斩杀线：通用智力 × 编码能力${HAS_TB ? ' × 终端智能' : ''}${HAS_PLANS ? ' × CommandCode' : ''}${HAS_GO ? ' × OpenCode Go' : ''}</h1>
   <div class="stale" id="stale-tip">⚠️ 数据已过期（生成于 <span id="stale-date">${GEN_DATE}</span>，距今超过 15 天），模型迭代较快请获取最新报告。</div>
-  <div class="sub">${[HAS_TB || HAS_PLANS ? (HAS_TB && HAS_PLANS ? '四榜' : '三榜') : '双榜'].slice(0, 0)}Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 编码能力 ${vcRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${HAS_PLANS ? ` / CommandCode ${plansRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
+  <div class="sub">${[HAS_TB || HAS_PLANS ? (HAS_TB && HAS_PLANS ? '四榜' : '三榜') : '双榜'].slice(0, 0)}Pareto 前沿 · 通用智力 ${aaRows.length} 模型 / 编码能力 ${vcRows.length} 模型${HAS_TB ? ` / 终端智能 ${tbRows.length} 模型` : ''}${HAS_PLANS ? ` / CommandCode ${plansRows.length} 模型` : ''}${HAS_GO ? ` / OpenCode Go ${goRows.length} 模型` : ''}${WITH_TOP_MISSING ? ` / 叠加 OpenRouter Top 20 模型` : ''}</div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-board="board-gen" role="tab" aria-selected="true">通用智力</button>
     <button class="tab" data-board="board-code" role="tab" aria-selected="false">编码能力</button>
     ${HAS_TB ? `<button class="tab" data-board="board-tb" role="tab" aria-selected="false">终端智能</button>` : ''}
     ${HAS_PLANS ? `<button class="tab" data-board="board-plans" role="tab" aria-selected="false">CommandCode</button>` : ''}
+    ${HAS_GO ? `<button class="tab" data-board="board-go" role="tab" aria-selected="false">OpenCode Go</button>` : ''}
   </div>
 
   <div class="board" id="board-gen">
@@ -409,12 +441,28 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
   </div>
   </div>` : ''}
 
+  ${HAS_GO ? `
+  <div class="board hidden" id="board-go">
+  <div class="card chart-box" id="card-go">
+    ${goSvg}
+    <div class="tooltip" id="tip-go"></div>
+  </div>
+
+  <div class="card">
+    <h2>OpenCode Go 智力 × 调用次数</h2>
+    <table>
+      <thead><tr><th>#</th><th>Model</th><th class="num" title="Artificial Analysis Intelligence Index（AA 单源；AA 没评分的模型标 🆕 待更新）">智力</th><th class="num" title="OpenCode Go 官方发布的每月估算请求数（按典型用法的 token 画像估算，原样引用）">次/月</th></tr></thead>
+      <tbody id="tbody-go"></tbody>
+    </table>
+  </div>
+  </div>` : ''}
+
   <div class="card">
     <h2>解读</h2>
     <div id="llm-obs">${OBS}</div>
   </div>
 
-  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.vals.ai/benchmarks/terminal-bench-4' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
+  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.vals.ai/benchmarks/terminal-bench-4' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${HAS_GO ? ' · https://opencode.ai/v2/docs/console/go' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
   <div class="gen-date">报告生成日期 ${GEN_DATE} · 榜单数据来自第三方公开来源，仅供学习交流，不构成选型或采购建议</div>
 </div>
 
@@ -438,6 +486,10 @@ const HAS_PLANS = ${JSON.stringify(HAS_PLANS)};
 const PLANS_ROWS = ${JSON.stringify(plansRows)};
 const PLANS_SURVIVORS = new Set(${JSON.stringify([...plansFront])});
 const PLANS_LINK = ${JSON.stringify(Object.fromEntries(plansRows.map((r) => [r.model, dsLink(r.model).url])))};
+const HAS_GO = ${JSON.stringify(HAS_GO)};
+const GO_ROWS = ${JSON.stringify(goRows)};
+const GO_SURVIVORS = new Set(${JSON.stringify([...goFront])});
+const GO_LINK = ${JSON.stringify(GO_LINK)};
 const WITH_TM = ${JSON.stringify(WITH_TOP_MISSING)};
 const TM_SUCCESSORS = ${JSON.stringify(TM_SUCCESSORS)};
 const TM_FREE = ${JSON.stringify(TM_FREE)};
@@ -672,9 +724,14 @@ if (HAS_TB) {
   }
 }
 
-// ---- CommandCode 表格 ----
-if (HAS_PLANS) {
-  const tbody = document.getElementById('tbody-plans');
+// ---- 「订阅套餐」类表格：CommandCode Max 10× / OpenCode Go 共用 ----
+// 两张表形态完全一致（X = 每月可跑请求数，Y = 智力，4 列：# / Model / 智力 / 次月），
+// 所以排序 / 徽标 / 分块逻辑只写一遍，差异靠 cfg 传进来：
+//   tbodyId / rows / survivors（render-* 算出的阶梯集合）/ link（model → OpenRouter URL）
+function renderCallTable(cfg) {
+  const tbody = document.getElementById(cfg.tbodyId);
+  const ROWS = cfg.rows ?? [];
+  if (!ROWS.length) return;
   const fmtK = (v) => v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1000 ? Math.round(v / 1000) + 'k' : String(Math.round(v));
   // ---- 排序：按族分块，块内新一代在上一代的上一行 ----
   // 直接按 index 降序排会散掉同族（比如 Kimi K2.7 Code 智力 25.8 会被 K2.6 的 27 压到下面，
@@ -682,16 +739,16 @@ if (HAS_PLANS) {
   //   块间：按族内最高智力降序（整族都没智力就按最高请求数），所以表格从上到下是"最强的家系"在前
   //   块内：gen 倒序（5.5 → 5 → 4.8 → 4.7 → 4.6），同代内再按智力降序
   //   待更新（index == null）：同块内排在有智力的之后，但**不拆散同族**——它们仍是官方
-  //     价格表里的模型，次数是官方实数，只是还没人给分。丢掉等于让 CommandCode 上新模型
-  //     从榜单上凭空消失，而这个 tab 的主要价值恰恰是次数。
+  //     价目表里的模型，次数是官方实数，只是还没人给分。丢掉等于让厂商新上的模型从榜单上
+  //     凭空消失，而这个 tab 的主要价值恰恰是次数。
   const vnum = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), undefined, { numeric: true });
-  // 免费档（官方写 Free、不限量）**置顶**，不进族分块。原因：它和付费档不可比——
+  // 免费档（官方写 Free / Unlimited）**置顶**，不进族分块。原因：它和付费档不可比——
   // requests_month 是 null，按次数排序会让它落到表底或者直接消失，但"这几个模型不要钱"
   // 恰恰是这张表最该先让人看到的信息。徽标沿用前 3 个 tab 的 🆓 免费约定。
-  const PLANS_FREE = PLANS_ROWS.filter((r) => r.free);
-  const PLANS_FAM_ORDER = (() => {
+  const FREE = ROWS.filter((r) => r.free);
+  const FAM_ORDER = (() => {
     const fams = new Map();
-    for (const r of PLANS_ROWS) {
+    for (const r of ROWS) {
       if (r.free) continue;
       if (!fams.has(r.family)) fams.set(r.family, []);
       fams.get(r.family).push(r);
@@ -699,32 +756,33 @@ if (HAS_PLANS) {
     const blocks = [...fams.values()].map((arr) => ({
       arr,
       // 块间排序键：有智力取最高智力；整块都没智力就退到最高请求数，保证待更新的家系也有位置
-      key: arr.some((r) => r.index != null) ? Math.max(...arr.map((r) => r.index ?? -Infinity)) : -1e9 + arr[0].requests_month / 1e9,
+      key: arr.some((r) => r.index != null) ? Math.max(...arr.map((r) => r.index ?? -Infinity)) : -1e9 + (arr[0].requests_month ?? 0) / 1e9,
     }));
     blocks.sort((a, b) => b.key - a.key);
-    // PLANS_FREE 必须包成 {arr} —— blocks 里每项都是 {arr, key}，下面统一 b.arr.sort()。
+    // FREE 必须包成 {arr} —— blocks 里每项都是 {arr, key}，下面统一 b.arr.sort()。
     // 直接把裸数组塞进数组字面量会在渲染第一行时抛 undefined.sort，整表 0 行且控制台无提示。
-    return [{ arr: PLANS_FREE, key: Infinity }, ...blocks].flatMap((b) =>
+    return [{ arr: FREE, key: Infinity }, ...blocks].flatMap((b) =>
       b.arr.sort((x, y) =>
         (x.index == null ? 1 : 0) - (y.index == null ? 1 : 0) ||   // 有智力的先
         vnum(y.gen, x.gen) ||                                      // 新一代在上
         ((x.tier ?? 'off-peak') === (y.tier ?? 'off-peak') ? 0 :     // 同代：off-peak 在 peak 前
           (x.tier === 'peak' ? 1 : -1)) ||
         (x.index ?? 0) - (y.index ?? 0) ||                          // 同代：智力降序
-        y.requests_month - x.requests_month));
+        (y.requests_month ?? 0) - (x.requests_month ?? 0)));
   })();
 
-  PLANS_FAM_ORDER.forEach((r, i) => {
-    const alive = PLANS_SURVIVORS.has(r.model);
+  FAM_ORDER.forEach((r, i) => {
+    const alive = cfg.survivors.has(r.model);
+    const url = cfg.link[r.model] ?? cfg.link[r.model.replace(/\s*\((?:off-)?peak\)$/i, '')];
     const tr = document.createElement('tr');
-    tr.dataset.url = PLANS_LINK[r.model];
+    tr.dataset.url = url;
     tr.tabIndex = 0;
     // 「🔪 高性价比」＝ 在 Pareto 阶梯上（front），和前 3 个 tab 的 alive 完全同构
-    // （🔪 作前缀符号 + tag 文字）。右上高性价比区（智力 ≥ 35 且 ≥ 100K 次/月）不给徽标：
+    // （🔪 作前缀符号 + tag 文字）。右上高性价比区（阈值在各 render 脚本里）不给徽标：
     // 它和阶梯高度重叠，单独标会把「落在区里但被支配」和「真在阶梯上」混为一谈，
     // 而这图恰恰要你看清这个差别。
     // 曾经还有「⚡ 高效」，是照搬前 3 个 tab 的 fast（"能力/成本被压制但更快，不是真被斩"）——
-    // 但 CommandCode 这张表**没有 Tokens/s**，快慢无从谈起，那套判据在这里没有意义，所以去掉。
+    // 但这两张表**没有 Tokens/s**，快慢无从谈起，那套判据在这里没有意义，所以去掉。
     // 早期还有「折扣层」和「映射存疑」，前者是 Contributor 的旧称。
     //
     // Contributor 是个例外，单独两个徽标：
@@ -732,8 +790,13 @@ if (HAS_PLANS) {
     //                  不标就等于让表格里性价比最高的行看起来平平无奇。
     //   贡献数据 —— 说明这个价格是拿数据换来的，和「普通订阅就能拿到」不是一回事。
     // 🔪 前缀也跟着加：它虽然不在阶梯上，但确实是这张表里最值得买的一行。
+    // ⚠️ 例外要不要给待更新的 Contributor 由 cfg.dealBadgeAlways 决定：
+    //   CommandCode 表给（它两轴都是官方实测的最好值，只是 CommandCode 自己没给分）；
+    //   OpenCode Go 表不给——那张表的智力来自 AA，Muse Spark Contributor 连 AA 都没评分，
+    //   此时挂 🔪 就是拿未证实的性价比做推荐。
     const pending = r.index == null;
-    const good = alive || r.contributor;
+    const deal = r.contributor && (cfg.dealBadgeAlways === true || !pending);
+    const good = alive || deal;
     tr.className = r.free ? 'free' : (good ? 'alive' : '');
     const bits = [];
     // 免费档没有智力分也不打 🆕——「未评分」和「不要钱」是两件事，同时挂两个徽标
@@ -744,15 +807,21 @@ if (HAS_PLANS) {
     }
     else if (pending) bits.push(' <span class="tag tag-warn">🆕 待更新</span>');
     else if (alive) bits.push(' <span class="tag">🔪 高性价比</span>');
-    if (r.contributor) bits.push(' <span class="tag">🔪 高性价比</span><span class="tag">贡献数据</span>');
-    tr.title = r.contributor ? '数据换折扣档 · 不计入 Pareto 阶梯' : '';
+    if (deal) bits.push(' <span class="tag">🔪 高性价比</span><span class="tag">贡献数据</span>');
+    // 待更新的 Contributor：只标"这价是拿数据换的"这个**可核对**的事实（灰徽标），
+    // 不标 🔪 —— 没有智力分时"高性价比"是没被证实的结论。
+    if (r.contributor && pending) bits.push(' <span class="tag tag-warn2">数据换折扣</span>');
+    tr.title = r.contributor ? '数据换折扣档（用提示词/补全换折扣价）· 不计入 Pareto 阶梯' : '';
     tr.innerHTML = \`<td>\${i+1}</td>
-      <td class="model">\${good ? '🔪 ' : ''}\${orA(r.model, PLANS_LINK[r.model])}\${bits.join('')}
+      <td class="model">\${good ? '🔪 ' : ''}\${orA(r.model, url)}\${bits.join('')}</td>
       <td class="num">\${pending ? '—' : r.index}</td>
       <td class="num">\${r.free ? '不限量' : fmtK(r.requests_month)}</td>\`;
     tbody.appendChild(tr);
   });
 }
+
+if (HAS_PLANS) renderCallTable({ tbodyId: 'tbody-plans', rows: PLANS_ROWS, survivors: PLANS_SURVIVORS, link: PLANS_LINK, dealBadgeAlways: true });
+if (HAS_GO) renderCallTable({ tbodyId: 'tbody-go', rows: GO_ROWS, survivors: GO_SURVIVORS, link: GO_LINK });
 
 // ---- 表格整行可点：点行内任意处（行内链接除外）新标签页打开 OpenRouter，回车/空格亦可 ----
 document.querySelectorAll('tbody tr[data-url]').forEach((tr) => {
@@ -856,6 +925,21 @@ if (HAS_PLANS) bindTip('chart-plans', 'card-plans', 'tip-plans', (d) => {
     <div class="tip-row">智力: <b>\${m.index}</b> · 官方 <b>\${(+m.req).toLocaleString()}</b> 次/月</div>
     <div class="tip-row"><b>\${(+m.reqweek).toLocaleString()}</b> 次/周 · <b>\${(+m.req5h).toLocaleString()}</b> 次/5h\${m.tier === 'peak' ? ' · peak ' + m.peakwin : ''}</div>\`;
 });
+if (HAS_GO) bindTip('chart-go', 'card-go', 'tip-go', (d) => {
+  const m = d.el.dataset;
+  const tags = [];
+  // 与表格同一套判定（必顶 === '1'：SVG 的 data-* 进 dataset 全是字符串，"0" 是 truthy）
+  const isFront = m.front === '1';
+  const isContributor = m.contributor === '1';
+  if (isFront || isContributor) tags.push('<span class="tip-effort" style="background:#2f9e44">🔪 高性价比</span>');
+  if (isContributor) tags.push('<span class="tip-effort" style="background:#c98415">贡献数据</span>');
+  if (m.tier === 'peak') tags.push('<span class="tip-effort" style="background:#8a8a8a">peak 时段</span>');
+  // 与 CommandCode tab 同规格：head + 2 行硬数据，不写口径解释、不写单价、不写自算对照。
+  // peak 孪生只靠模型名后缀 + 一行时间窗区分。
+  return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span>\${tags.join('')}</span></div>
+    <div class="tip-row">智力: <b>\${m.index}</b> · 官方估算 <b>\${(+m.req).toLocaleString()}</b> 次/月</div>
+    <div class="tip-row"><b>\${(+m.reqweek).toLocaleString()}</b> 次/周 · <b>\${(+m.req5h).toLocaleString()}</b> 次/5h\${m.tier === 'peak' ? ' · peak ' + m.peakwin : ''}</div>\`;
+});
 
 </script>
 </body>
@@ -868,3 +952,8 @@ console.log(`aa frontier: ${aaFront.size}/${aaRows.length}, zone: ${aaZone.lengt
 console.log(`tb frontier: ${tbFront.size}/${tbPlotted.length} (plotted/${tbRows.length} rows), zone: ${tbZone.length}, worst: ${tbCut.length ? tbWorst.model + '/$' + tbWorst.cost : '(none)'}`);
 console.log('overlap:', overlap.length ? overlap.map(([d, a]) => `${d} = ${a}`).join('; ') : '(none)');
 if (HAS_PLANS) console.log(`plans frontier: ${plansFront.size}/${plansRows.length} (主图层, Contributor 除外), 高性价比区: ${plansZone.length}, deal layer: ${plansRows.filter((r) => r.contributor).map((r) => r.model).join(', ') || '(none)'}${plansWorst ? `, worst: ${plansWorst.model}/${plansWorst.index}` : ''}`);
+if (HAS_GO) {
+  const goScored = goRows.filter((r) => r.index != null && r.requests_month != null);
+  console.log(`go frontier: ${goFront.size}/${goScored.length} (plotted/${goRows.length} rows), 高性价比区: ${goZone.length} (${goZone.map((r) => r.model).join(', ') || '(none)'})`);
+  console.log(`go 待更新 (AA 无分, 只进表格): ${goRows.filter((r) => r.index == null).map((r) => r.model).join(', ') || '(none)'}`);
+}

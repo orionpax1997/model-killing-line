@@ -1,13 +1,13 @@
 ---
 name: model-killing-line
-description: "Draws the 模型斩杀线 - Pareto-frontier scatters (Vibe Code Bench Score vs Cost/Test + Artificial Analysis Intelligence Index vs Cost per Task + Vals AI Terminal-Bench 4.0 Score vs Cost/Test + CommandCode Max 10× 智力 vs 每月可跑请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, Vibe Code / 编码能力 chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://www.vals.ai/benchmarks/vibe-code, https://www.vals.ai/benchmarks/terminal-bench-4, https://artificialanalysis.ai/leaderboards/models and https://commandcode.ai/docs/plans/max."
+description: "Draws the 模型斩杀线 - Pareto-frontier scatters (Vibe Code Bench Score vs Cost/Test + Artificial Analysis Intelligence Index vs Cost per Task + Vals AI Terminal-Bench 4.0 Score vs Cost/Test + CommandCode Max 10× 智力 vs 每月可跑请求数 + OpenCode Go 智力 vs 每月估算请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, Vibe Code / 编码能力 chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, OpenCode Go / OpenCode 套餐 chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://www.vals.ai/benchmarks/vibe-code, https://www.vals.ai/benchmarks/terminal-bench-4, https://artificialanalysis.ai/leaderboards/models, https://commandcode.ai/docs/plans/max and https://opencode.ai/v2/docs/console/go."
 ---
 
 # model-killing-line
 
 Zero-argument skill. Fetches the two Vals AI leaderboards (Vibe Code Bench +
 Terminal-Bench 4.0), the Artificial Analysis model leaderboard,
-and (可选) the CommandCode Max 10× plan, computes each Pareto
+加上两个订阅套餐页（CommandCode Max 10× / OpenCode Go），computes each Pareto
 frontier, and emits a
 single-page `index.html` with switchable sections (tab 切换，默认通用智力，
 解读常驻) — chart + table per board 由脚本生成，解读由 LLM 每次实时撰写（脚本不写解读文案）；
@@ -47,6 +47,11 @@ single-page `index.html` with switchable sections (tab 切换，默认通用智�
   智力 ≥ 35 且 ≥ 100K 次/月。**只做 Max 10×**——OpenCode / Pro plan 的请求数、
   Max 20× 的额度都不能混进来（口径不同，混了图就没意义）。详见下面
   「CommandCode tab 的口径与过滤规则」一节，那一节是本 tab 的行为契约，改动前先读。
+- ⑤ OpenCode Go 斩杀线（数据源 OpenCode 官方文档，可选）: X = **基础 Go（$10/月）**
+  官方估算的 `Requests per month`（log 轴，向右＝更能跑），Y = 智力指数（**AA 单源**）。
+  右上方高性价比区 = 智力 ≥ 27 且 ≥ 100K 次/月。**只做 Go 一档**：Go Plus（$40，3× 额度）/
+  Go Teams（$20/member）都是同一批模型的三套额度，混进来会让同一模型在图上出现三个 X 位置，
+  而图上没有价格轴。详见下面「OpenCode Go tab 的口径与过滤规则」一节。
 - 解读只有一块: 由 LLM 每次实时根据最新数据自由撰写，脚本不生成解读文案，只提供数据。
 
 Frontier models render as logo circles with callout labels, everyone else
@@ -65,12 +70,14 @@ node .agents/skills/model-killing-line/scripts/fetch-aa.mjs           # → $TMP
 node .agents/skills/model-killing-line/scripts/fetch-tb.mjs            # → $TMPDIR/model-killing-line/tb-data.json (61 rows, Vals AI Terminal-Bench 4.0) — 可选
 node .agents/skills/model-killing-line/scripts/fetch-openrouter.mjs   # → $TMPDIR/model-killing-line/or-data.json (Top 30 from OpenRouter Top Weekly, text modality) — 可选
 node .agents/skills/model-killing-line/scripts/fetch-plans.mjs         # → $TMPDIR/model-killing-line/plans-data.json (CommandCode Max 10×) — 可选
+node .agents/skills/model-killing-line/scripts/fetch-go.mjs            # → $TMPDIR/model-killing-line/go-data.json (OpenCode Go $10/月) — 可选
 node .agents/skills/model-killing-line/scripts/find-top-missing.mjs   # → $TMPDIR/model-killing-line/top-missing.json (OR Top 20 里没上双榜的模型) — 可选
 node .agents/skills/model-killing-line/scripts/render-vc.mjs          # → $TMPDIR/model-killing-line/vc-chart.svg (logos inlined as data URIs)
 node .agents/skills/model-killing-line/scripts/render-aa.mjs          # → $TMPDIR/model-killing-line/aa-chart.svg
 node .agents/skills/model-killing-line/scripts/render-tb.mjs          # → $TMPDIR/model-killing-line/tb-chart.svg — 可选（和 fetch-tb 成对，结构与 render-vc 同构）
 node .agents/skills/model-killing-line/scripts/render-plans.mjs       # → $TMPDIR/model-killing-line/plans-chart.svg — 可选（和 fetch-plans 成对）
-node .agents/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；存在 tb-data.json + tb-chart.svg 时自动加「终端智能」tab，存在 plans-data.json + plans-chart.svg 时再自动加「CommandCode」tab；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
+node .agents/skills/model-killing-line/scripts/render-go.mjs          # → $TMPDIR/model-killing-line/go-chart.svg — 可选（和 fetch-go 成对）
+node .agents/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing]  # → $TMPDIR/model-killing-line/index.html (单文件 HTML；存在 tb-data.json + tb-chart.svg 时自动加「终端智能」tab，存在 plans-data.json + plans-chart.svg 时再自动加「CommandCode」tab，存在 go-data.json + go-chart.svg 时再自动加「OpenCode Go」tab；带 --with-top-missing 才注入 OR Top 缺失行；解读区只留 #llm-obs 空位)
 # LLM 看完本轮数据后自由撰写解读 HTML 片段，存文件后注入：
 node .agents/skills/model-killing-line/scripts/gen-html.mjs [--with-top-missing] --obs /tmp/mkl-obs.html  # --obs <html文件|->（- 从 stdin 读；MKL_OBS 传路径亦可）
 node .agents/skills/model-killing-line/scripts/open.mjs               # auto-open index.html in default browser
@@ -157,10 +164,31 @@ see below. The scripts read/write via cwd and need only node stdlib.
 - `render-plans.mjs`: 结构同前三个，但**前沿大圆不做 de-clutter**（见下），
   `data-tier` / `data-contributor` / `data-peakwin` 属性，peak 孪生点用虚线环 +
   从 off-peak 拉细连线，Contributor 用橙色虚线大圈 + 两行标注。
+- `fetch-go.mjs`: GETs `https://opencode.ai/v2/docs/console/go`（Astro SSR，页面把三个套餐
+  Go / Go Plus / Go Teams 的表格**全渲染进 DOM**，每类表各出现 3 次、顺序固定 = Go 在最前）。
+  抽三类表：价格表（Model | Input | Output | Cached Read | Cached Write | Monthly limit）、
+  估算请求表（Model | Requests per 5 hours / week / month）、隐私表（Model | Model training |
+  Data retention），并抓页尾那段"逐模型每请求 token 画像"。**只取第一张价格表 + 第一张估算请求表
+  （= Go $10/月）**，用两个自检堵住"静默拿错套餐"：套餐表里 Go 的价格必须是 $10；Go 那张价格表的
+  月额度中位数必须小于另外两张（否则说明 tab 顺序变了）。价格表模型名折叠规则：`(≤ X tokens)` /
+  `(> X tokens)` 上下文档位只留低价档；`(Off-Peak)` / `(Peak)` 拆成两个孪生行（peak 的请求数按
+  `peak_in ÷ off_in` 倍率缩放）；`(50% off)` 促销行取**折后价**（单元格里 `$4.00 $2.00` 取最后一个数，
+  所以数字解析一律 `last(numbersIn(cell))`）。`Unlimited` 的请求数存 `null` + `free: true`
+  （log 轴画不了无限）。Y 轴智力**只用 AA**（见下节），AA 无分的行标 `index_pending`、不上图。
+  自算 `monthly_limit ÷ (官方 token 画像 × 官方单价)` 作为 `est_requests_month` 只做 QA：
+  抓对表时 `est_vs_official` 中位数应在 95%~105%（实测 100.0%）。
+- `render-go.mjs`: 与 `render-plans.mjs` 同构（右上高性价比区、按 requests 降序扫 index
+  record-high 的右上包络、`MIN_STEP=0.5`、固定 R=15 不做 de-clutter、碰撞感知 callout），
+  三处不同：① X 轴用 `X_LADDER` 阶梯自适应（数据 ~735~217k 次/月 → 轴域 500~500k；沿用
+  "10 的整数次幂"写法左右会各空掉 1/5 画布）；② Y 轴不设 60 分母，取 `ceil((max+2)/5)*5`
+  （当前 50 → 55），只留大圆 + callout 的抬头空间；③ peak 孪生点用灰色虚线环 + 一条从 off-peak
+  指过来的细虚线（表示"同一款模型的另一个时段"，不是另一款模型）。`data-req` / `data-req5h` /
+  `data-reqweek` / `data-tier` / `data-peakwin` 属性，三态与表格一致。
 
 三维语义（能力 × 成本 × 效率）：2D 前沿（绿，🔪高性价比）只看能力+成本；
 效率维三张散点榜各自用自家的时间口径（Vibe Code Bench = **Duration / Test**，
-Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；CommandCode 无效率维），
+Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；
+CommandCode / OpenCode Go 两张订阅榜无效率维），
 **不再做跟 AA 融合的复合效率**（DeepSWE 的 steps 与旧 TBench 的 run 平均 tok/s 都随换源下线了）。
 叠加效率后仍无人能全包围的，再在内部按能力×成本取一次次级 2D 前沿
 （不画线只判断）：线上才算高效（蓝，⚡），次级线下
@@ -174,15 +202,21 @@ Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；CommandCo
   effort 后缀 → 小写 hyphen slug；`aaLink(model, creator)` 按 AA 的 Creator 列定 org，
   `vcLink(model, org)` 按 Vals 详情页路径里的 org 前缀定 org（`VALS_ORG_TO_OR`），
   `tbLink` = `vcLink`（两张 Vals 榜同站同源，都按详情页 `/models/<org>_<slug>` 定 org；
-  旧 tbench.ai 榜用的是 Creator 列 + `aaLink`，已随换源下线），`dsLink` 只剩 CommandCode 那张表在用；个例进 `SLUG_OVERRIDE`，
+  旧 tbench.ai 榜用的是 Creator 列 + `aaLink`，已随换源下线），`dsLink` 现在被 CommandCode 与
+  OpenCode Go 两张表共用——它会把名字里的空格先压成 `-` 再匹配前缀（OpenCode 写 `GPT 6 Luna` /
+  `MiMo-V2.6-Flash`，不归一化会漏掉 `gpt-` 这一整批，表现为「同一模型在 AA tab 有详情页、
+  在 OpenCode tab 只有搜索页」），并新增 `longcat → meituan` / `hy3|hy4 → tencent` /
+  `step- → stepfun` 三条前缀；个例进 `SLUG_OVERRIDE`，
   OR 无详情页的进 `SEARCH_ONLY` 回退搜索页）。新增模型先 curl 验 title 非软 404
   再进映射（Vibe Code Bench 那批是用 https://openrouter.ai/api/v1/models 的
   id 清单逐个核对的，19 个已下架/未上 OR 的老模型会走搜索页）。
 - `gen-html.mjs`: inlines the SVGs (`chart-code` ← vc-chart.svg + `chart-gen` ← aa-chart.svg,
   以及存在 tb-chart.svg
-  时第三个 `chart-tb`、存在 plans-chart.svg 时第四个 `chart-plans`) + all JSONs + shared
-  `LOGO_MAP` into `index.html`: two (带 TB 数据则 three, 再带 CommandCode 数据则 four)
-  independent chart+table sections + tabs, one joint 解读卡片（见下「解读：LLM 实时撰写」——
+  时第三个 `chart-tb`、存在 plans-chart.svg 时第四个 `chart-plans`、存在 go-chart.svg 时
+  第五个 `chart-go`) + all JSONs + shared
+  `LOGO_MAP` into `index.html`: two (带 TB 数据则 three, 再带 CommandCode 数据则 four,
+  再带 OpenCode Go 数据则 five) independent chart+table sections + tabs, one joint 解读卡片
+  （见下「解读：LLM 实时撰写」——
   脚本只在卡片里留 `<div id="llm-obs">` 空位 + 把数据以 JSON 形式内联进页面供
   LLM 读取，不生成任何解读文案，不硬编码模型名）。页头有小字生成日期
   （构建时写入）+ JS 过期判断：打开时间距生成日期超过 15 天则显示数据过期提示。Tooltips
@@ -292,7 +326,9 @@ Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；CommandCo
 
 不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
 缺测"说成"不推荐"；用编码榜/TB 的缺测率来评价 AA 上的高 Index 模型；**用编码榜 / TB 的
-数字给 📌 太长不看 定档**（推荐理由的 X / Y 必须是 AA 的 Index 与 Cost per Task）。
+数字给 📌 太长不看 定档**（推荐理由的 X / Y 必须是 AA 的 Index 与 Cost per Task）；
+**把 OpenCode Go 的"次/月"和 CommandCode 的"次/月"直接比大小**（两家 token 画像、月额度、
+套餐结构都不同，OpenCode 那个还是估算值——跨站比会得到"哪家更划算"的假结论）。
 
 ## CommandCode tab 的口径与过滤规则
 
@@ -359,12 +395,66 @@ Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；CommandCo
 - **tooltip 只留 2 行硬数据**（规格对齐 AA tab 的 `chart-gen`）：head + 智力/次月 +
   次周/次5h。不要加口径解释、自算对照、AA 兜底详情。
 
+## OpenCode Go tab 的口径与过滤规则
+
+这一节是 ⑤ tab 的**行为契约**。它 90% 照搬 CommandCode tab（同一套"右上角才是好"的语义、
+同一套 4 列表格与 🔪 徽标），但下面四条是它自己的硬规则。
+
+### 口径
+- **只做基础 Go（$10/月）一档**。Go Plus（$40，约 3× 额度）/ Go Teams（$20/member）都是
+  同一批模型的三套额度：混进一张图会让同一个模型出现三个 X 位置，而图上没有价格轴，
+  读者只会看到"同名点散成三处"。单档也才谈得上"月费固定 → X 轴纯比能跑多少次"。
+  选 Go 而不是 Plus/Teams：它是文档页的标题档、最便宜、且**每美元额度最高**
+  （Plus = 3× 请求 / 4× 月费；Teams ≈ 1.08× 请求 / 2× 月费）。
+- **X 轴 = 官方 `Requests per month` 的估算值**，原样引用，不二次推算。页面自己写明这是按
+  "典型 Go 用法"的 token 画像估的（画像逐模型列在页尾，抓进 `tokens_per_request`）。
+  自算值（月额度 ÷ 每请求成本）只留 `est_requests_month` / `est_vs_official` 做 QA。
+- **Y 轴 = AA Intelligence Index，单源**。OpenCode 自己不发布分数。另一条候选是 CommandCode
+  的 Intelligence 列，但 2026-11 实测两家**已经不是同一把尺子**：Claude / GPT / Gemini 差 1~4 分，
+  国产开放权重模型系统性差 +10~16 分（GLM-5.3 44.8 vs AA 32、MiMo V2.6 Pro 46.3 vs 30、
+  Step 5 Preview 43.7 vs 29）。两根尺子混在一根 Y 轴上，点的高低就有一半来自尺子差异，
+  所以这里**不混**——与 CC tab 的 "CC 优先 / AA 兜底" 是相反的取值顺序，改动时别照抄。
+  AA 同一模型的多个 effort 变体（`Grok 4.7 (xhigh)/(high)/(low)`、`Claude Haiku 5.5 (max)/…`）
+  取 **index 最高**的那个（与 AA tab 的 table 口径一致），`aa_model` 字段记录实际取到哪一行。
+- **高性价比区在右上**：`index ≥ 27 && requests_month ≥ 100000`（阈值按本榜实际分布定：
+  100K 次/月以上只有 3 个点，27 分就是这一簇里最低的那个）。
+
+### 折叠 / 过滤（按顺序）
+1. **上下文档位折叠**：价格表把同一模型按 `(≤ 512K tokens)` / `(> 512K tokens)` 拆行，
+   只留低价档（`≤`）那一行——估算请求数本来就是按低价档的 token 画像算的。
+2. **peak / off-peak 孪生拆分**：DeepSeek V4.1 Flash / V4 Pro 在官方表里是两行真价，
+   拆成 `(off-peak)` / `(peak)` 两个点，peak 的请求数按 `peak_in ÷ off_in` 倍率缩放
+   （倍率精确；用成本重算会带进 token 画像误差）。支配判定与同请求数去重必须**按 tier 隔离**。
+3. **族内弱支配过滤**（`superseded`）：同族里新一代 `index >=` 且 `requests >=` 上一代、
+   至少一项严格更高，就删旧代。**不能"每族只留最高版本"**——会误删真实的取舍档位。
+   OpenCode 上典型：DeepSeek V4 Pro 被 V4.1 Flash 支配（同族、两轴都不差）。
+4. **同请求数去重**（`same_req_dropped`）：同族同 tier 且官方估算月请求数**完全相同**
+   （= 同一额度同一价）的多代只留最新。典型：MiMo-V2.6-Flash = MiMo-V2.5 = 150,400、
+   MiMo-V2.6-Pro = MiMo-V2.5-Pro = 16,300、Muse Spark 1.3/1.2 Contributor = 226,600。
+5. **免费档**（`Unlimited` 请求数 + `Free` 价格：Beam Free / Iceman Contributor Free）：
+   `requests_month = null`，表格置顶 + 🆓 免费 + 「不限量」，不进图（log 轴画不了无限）。
+6. **AA 无分的行不丢弃**：表格里 `—` + 🆕 待更新（当前 14 个，占全表一半），不上图。
+   Contributor（数据换折扣档，当前 Muse Spark 1.3/1.2）在**没有智力分**时**不给** 🔪/贡献数据
+   徽标——那是拿未证实的性价比做推荐；只标一个灰色「数据换折扣」（"这价是拿数据换的"是可核对的
+   事实，与"值不值"无关）。CC tab 相反：它有官方实测值，所以照旧给 🔪+贡献数据。因此
+   `renderCallTable` 的 `dealBadgeAlways` 只有 CC 表传 `true`。
+
+### 表格 / tooltip
+- 表格 4 列：`# / Model / 智力 / 次/月`，与 CC 表**共用同一个渲染函数** `renderCallTable()`
+  （族分块、免费置顶、待更新排序、🔪 徽标全部一套代码）。改一边等于同时改两个 tab。
+- tooltip 与 CC tab 同规格：head + 智力/次月 + 次周/次5h；peak 孪生只多一段时段窗口，
+  靠模型名的「（peak）」后缀 + 灰色 `peak 时段` 标签区分。
+
 ## Thresholds (edit in the render script, never ask the user)
 
 - render-vc.mjs: `ZONE_COST` / `ZONE_SCORE` (`5` / `80`): Vibe Code Bench 高性价比区
   （x 上限 $5、y 下限 80%）。x 轴按 `X_LADDER` 阶梯自适应（当前数据 $0.07~$57.92 →
   轴域 $0.05~$100），y 轴 `0 ~ max(100, 数据 max+2 扩到 5 的倍数)`。
 - render-aa.mjs: `ZONE_COST` / `ZONE_INDEX` (`1` / `35`).
+- render-go.mjs: `ZONE_REQ` / `ZONE_INDEX` (`100000` / `27`): OpenCode Go 高性价比区
+  （x 下限 10 万次/月、y 下限 27 分，右上）。x 轴按 `X_LADDER` 阶梯自适应（当前数据
+  735~216,670 → 轴域 500~500k），y 轴 `min(20, 数据 min 向下扩到 5 的倍数)` ~
+  `ceil((数据 max+2)/5)*5`（当前 20~55，不设 60 分母，否则上半张图全空）。
 - render-tb.mjs: `ZONE_COST` / `ZONE_SCORE` (`10` / `40`): Vals Terminal-Bench 4.0
   高性价比区（x 上限 $10、y 下限 40%）。x 轴同 render-vc 的 `X_LADDER` 阶梯自适应
   （当前数据 $0.21~$30.34 → 轴域 $0.1~$50），y 轴 `0 ~ max(70, 数据 max+2 扩到 5 的倍数)`
@@ -386,12 +476,22 @@ Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；CommandCo
   （列顺序 / 表格容器）— 重新检查文件头的列约定。
 - `render-tb.mjs` prints frontier points + `labeled:` + `efficient:`；前沿数按 model 计
   一行一个模型，`efficient:` 里的名字必须能在 TB 表格里找到对应行（三态一致）。
+- `fetch-go.mjs` prints `价格表折叠: 39 行 → ~31 个模型`（上下文档位折叠 + peak 拆孪生）、
+  `估算请求表: 31 行`、`月额度中位数 <…>`（Go < Teams < Plus 顺序自检通过）、
+  `自算 vs 官方估算（中位数）: 100.0% ✓ 抓对了表`、`智力（AA 单源）: 有分 ~14 / 待更新 ~17`。
+  任何一条量级变了 = OpenCode 文档页改版（tab 顺序、表头列名、token 画像段落），
+  先看脚本头注释里的表格约定。自检那一行若不在 95%~105%，说明抓到了 Go Plus 的额度。
+- `render-go.mjs` prints x/y domain + 高性价比区个数 + pareto 名单 + `labeled:` + 待更新/免费名单；
+  pareto 名单必须与 `gen-html.mjs` 打印的 `go frontier:` 一致（两边同一个 `MIN_STEP=0.5`），
+  `labeled:` 里的「未放下 …」说明气泡位不够（圆点仍在，hover 可看名字）。
 - `render-vc.mjs` prints frontier points + `labeled:` + `efficient:`；前沿数必须等于
   Pareto-optimal 行数（按 model 计，一行一个模型），`labeled:` 里若出现「未放下 …」说明
   气泡位置不够，圆点仍在（hover 可看名字），可考虑再加大 padT 或补候选位。
 - Hovering any dot in `index.html` shows a card with that dot's lab logo,
   model name, score, cost and tokens/duration（编码 / 终端两张 Vals 榜都没有 harness、
   agent、effort、tok/s；终端榜的 tooltip 标题写 Terminal-Bench 4.0 Score）。
+  CommandCode / OpenCode Go 两张订阅榜只有两行硬数据（智力 + 官方次/月 + 次周/次5h），
+  没有 tokens/s —— 它们的 X 轴是"能跑多少次"，快慢无从谈起。
 - `logos/` (27 files, ~464KB, designarena `model-logos`, resized to 128px)
   ships with the skill and is inlined at build time; nothing is copied to
   the output dir. Logo mapping lives in `logoFileOf()` in
