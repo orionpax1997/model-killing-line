@@ -40,6 +40,12 @@ const CREATOR_TO_ORG = new Map(Object.entries({
   'xiaomi': 'xiaomi',
   'minimax': 'minimax',
   'inclusionai': 'inclusionai',
+  'mistral': 'mistralai',
+  'stepfun': 'stepfun',
+  'cohere': 'cohere',
+  'upstage': 'upstage',
+  'ibm': 'ibm',
+  'reflection': 'reflection',
 }));
 
 // DeepSWE 榜无 creator 列，按模型前缀推 org（与 logos.mjs 的前缀映射同构）
@@ -90,9 +96,11 @@ const SLUG_OVERRIDE = {
   'gemini-3-flash': 'gemini-3-flash-preview',
   // vals 的 `Muse Spark 1.3 Max` 在 OR 上只有基础版详情页（max 是同一页的 effort 变体）
   'muse-spark-1.3-max': 'muse-spark-1.3',
+  // AA 的 `Tencent Hy4` → OR 上是 `tencent/hy4`（不带品牌前缀）
+  'tencent-hy4': 'hy4',
 };
 // OR 无详情页（打开是软 404，title 只有 `OpenRouter`），只能走搜索页
-const SEARCH_ONLY = new Set(['qwen3.8-flash-next', 'quasar-438b']);
+const SEARCH_ONLY = new Set(['qwen3.8-flash-next', 'quasar-438b', 'ling-3.1-flash-1019']);
 
 const searchUrl = (name) => `https://openrouter.ai/models?q=${encodeURIComponent(name)}`;
 
@@ -107,6 +115,10 @@ const build = (displayName, slug, org) => {
 /** AA 行：aaLink(model, creator)，如 ('Muse Spark 1.3 (max)', 'Meta') → meta/muse-spark-1.3 */
 export const aaLink = (model, creator) =>
   build(model, normalizeSlug(model), CREATOR_TO_ORG.get(normKey(creator ?? '')) ?? null);
+
+// AA 榜的模型名带品牌前缀（`Tencent Hy4`），而 OR / 编码榜 / 订阅榜写 `hy4`——
+// 归一化后是两个不同的 key。这里给出别名，让别处的 `hy4` 能认到 AA 那一行。
+export const AA_CANON_ALIAS = Object.freeze({ 'tencent-hy4': ['hy4'] });
 
 // Vals AI 详情页路径里的 org 前缀 → OpenRouter org。核对不上的（devin/ant 等 OR 侧
 // 没有同名 org 的）故意不写 → build() 拿到 null org，自动回退搜索页。

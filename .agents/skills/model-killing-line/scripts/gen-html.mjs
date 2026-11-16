@@ -79,7 +79,8 @@ rmSync(path.join(DIR, 'logos'), { recursive: true, force: true });
 //   2D 前沿 ⊂ 3D 前沿；差集再在内部按能力×成本取一次 2D 前沿（次级线，
 //   不画线只做判断）—— 线上才算「高效」标蓝，线下（被另一个蓝色在
 //   能力+成本上全包围）降级为真被斩，不标蓝
-const numSpeed = (r) => { const v = parseFloat(r.speed); return Number.isNaN(v) ? -Infinity : v; };
+// AA 效率维 = 榜单自带的 Time per Task（分钟，越短越快）→ 帕累托第三维按「越大越好」，故取负号
+const numSpeed = (r) => (r.time_per_task == null ? -Infinity : -r.time_per_task);
 const pareto2 = (rows, costOf, yOf, nameOf = (r) => r.model) => {
   const names = new Set();
   let best = -Infinity;
@@ -207,7 +208,7 @@ const LOGO_MAP = Object.fromEntries(usedFiles.map((f) => [f, logoUriOf(f)]));
 // ---- 模型名归一化 → OpenRouter 详情页链接（精确命中拼详情页，
 //   OR 无详情页的回退搜索页；见 openrouter.mjs，构建期算好注入页面） ----
 const VC_LINK = Object.fromEntries(vcRows.map((r) => [r.k, vcLink(r.model, r.org).url]));
-const AA_LINK = Object.fromEntries(aaRows.map((r) => [r.model, aaLink(r.model, r.creator).url]));
+const AA_LINK = Object.fromEntries(aaRows.map((r) => [r.model, aaLink(r.base ?? r.model, r.creator).url]));
 const TB_LINK = Object.fromEntries(tbRows.map((r) => [r.model, tbLink(r.model, r.org).url]));
 // OpenCode Go 榜：peak/off-peak 孪生名带后缀，拼链接前先剥掉（否则同一款模型两个点指向两个 URL）
 const GO_BASE = (m) => String(m).replace(/\s*\((?:off-)?peak\)$/i, '');
@@ -245,7 +246,7 @@ const tmSubLine = (m) => {
       if (m.input_price != null) bits.push(`$${m.input_price.toFixed(2)}/M 输入`);
       if (m.output_price != null) bits.push(`$${m.output_price.toFixed(2)}/M 输出`);
     }
-    if (m.aa_speed != null) bits.push(`${m.aa_speed} tok/s`);
+    if (m.aa_time != null) bits.push(`${m.aa_time} min/任务`);
     return bits.join(' · ');
   }
   const wk = m.weekly_tokens ? fmtWeekly(m.weekly_tokens) + '/周' : '周用量不在 OR Top 30';
@@ -388,7 +389,7 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
   <div class="card">
     <h2>通用智力排名</h2>
     <table>
-      <thead><tr><th>#</th><th>Model</th><th>Creator</th><th class="num">Index</th><th class="num">Cost/Task</th><th class="num">Tokens/s</th><th class="num">Latency(s)</th></tr></thead>
+      <thead><tr><th>#</th><th>Model</th><th>Creator</th><th class="num">Index</th><th class="num">Cost/Task</th><th class="num">Time/Task</th><th class="num">1st tok(s)</th></tr></thead>
       <tbody id="tbody-gen"></tbody>
     </table>
   </div>
@@ -506,7 +507,7 @@ const tmSubLine = (m) => {
       if (m.input_price != null) bits.push('$' + m.input_price.toFixed(2) + '/M 输入');
       if (m.output_price != null) bits.push('$' + m.output_price.toFixed(2) + '/M 输出');
     }
-    if (m.aa_speed != null) bits.push(m.aa_speed + ' tok/s');
+    if (m.aa_time != null) bits.push(m.aa_time + ' min/任务');
     return bits.join(' · ');
   }
   const wk = m.weekly_tokens ? fmtWeekly(m.weekly_tokens) + '/周' : '周用量不在 OR Top 30';
@@ -573,7 +574,7 @@ const tmCells = (m, numCols) => {
         tr.dataset.url = tmUrl(s);
         tr.tabIndex = 0;
         if (s.predecessor.via === 'aa-highlight-no-or') {
-          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vibe Code Bench 暂缺（锚点不在榜中）';
+          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + (s.aa_time ?? '—') + ' min/任务），Vibe Code Bench 暂缺（锚点不在榜中）';
         } else {
           tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 Vibe Code Bench 暂缺（推测锚点 ' + s.predecessor.key + ' 不在榜中）';
         }
@@ -586,7 +587,7 @@ const tmCells = (m, numCols) => {
       tr.dataset.url = tmUrl(s);
       tr.tabIndex = 0;
       if (s.predecessor.via === 'aa-highlight-no-or') {
-        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vibe Code Bench 暂缺；上一代疑似「' + s.predecessor.key + '」';
+        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + (s.aa_time ?? '—') + ' min/任务），Vibe Code Bench 暂缺；上一代疑似「' + s.predecessor.key + '」';
       } else {
         tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 Vibe Code Bench；推测为上一代「' + s.predecessor.key + '」的后续';
       }
@@ -616,7 +617,7 @@ const tmCells = (m, numCols) => {
     const fast = !alive && AA_FAST.has(r.model);
     const tr = document.createElement('tr');
     tr.className = alive ? 'alive' : (fast ? 'fast' : '');
-    if (fast) tr.title = '高效：能力/成本被压制，但 Tokens/s 更高（更快），不是真被斩';
+    if (fast) tr.title = '高效：能力/成本被压制，但 Time / Task 更短（跑得更快），不是真被斩';
     tr.dataset.url = AA_LINK[r.model];
     tr.tabIndex = 0;
     tr.innerHTML = \`<td>\${i+1}</td>
@@ -624,8 +625,8 @@ const tmCells = (m, numCols) => {
       <td>\${r.creator}</td>
       <td class="num">\${r.index}\${r.estimated ? '*' : ''}</td>
       <td class="num">$\${r.cost.toFixed(2)}</td>
-      <td class="num">\${r.speed}</td>
-      <td class="num">\${r.latency}</td>\`;
+      <td class="num">\${r.time_per_task == null ? '—' : r.time_per_task + ' min'}</td>
+      <td class="num">\${r.latency == null ? '—' : r.latency + ' s'}</td>\`;
     tbody.appendChild(tr);
     trByModel.set(r.model, tr);
     trByCanon.set(normalizeSlug(AA_LINK[r.model].replace(new RegExp('^https://openrouter\\.ai/[^/]+/'), '')), tr);
@@ -691,7 +692,7 @@ if (HAS_TB) {
         tr.dataset.url = tmUrl(s);
         tr.tabIndex = 0;
         if (s.predecessor.via === 'aa-highlight-no-or') {
-          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vals Terminal-Bench 4.0 暂缺（锚点不在 TB 表中）';
+          tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + (s.aa_time ?? '—') + ' min/任务），Vals Terminal-Bench 4.0 暂缺（锚点不在 TB 表中）';
         } else {
           tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），AA 已 highlight 但 Vals Terminal-Bench 4.0 暂缺（推测锚点 ' + s.predecessor.key + ' 不在 TB 表中）';
         }
@@ -704,7 +705,7 @@ if (HAS_TB) {
       tr.dataset.url = tmUrl(s);
       tr.tabIndex = 0;
       if (s.predecessor.via === 'aa-highlight-no-or') {
-        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + s.aa_speed + ' tok/s），Vals Terminal-Bench 4.0 暂缺；上一代疑似「' + s.predecessor.key + '」';
+        tr.title = 'AA 高效模型「' + s.short_name + '」（Intelligence Index ' + s.aa_index + ' · $' + s.input_price.toFixed(2) + '/M · ' + (s.aa_time ?? '—') + ' min/任务），Vals Terminal-Bench 4.0 暂缺；上一代疑似「' + s.predecessor.key + '」';
       } else {
         tr.title = 'OR 周用量 ' + fmtWeekly(s.weekly_tokens) + '（第 ' + s.rank + ' 名），尚未上 Vals Terminal-Bench 4.0；推测为上一代「' + s.predecessor.key + '」的后续';
       }
@@ -892,7 +893,7 @@ bindTip('chart-gen', 'card-gen', 'tip-gen', (d) => {
   const m = d.el.dataset;
   return \`<div class="tip-head">\${logoImg(d)}<span><span class="tip-name">\${m.model}</span>\${m.fast ? '<span class="tip-effort" style="background:#1971c2">⚡高效</span>' : ''}</span></div>
     <div class="tip-row">\${m.creator} · Index: <b>\${m.index}</b> · Cost: <b>$\${(+m.cost).toFixed(2)}</b></div>
-    <div class="tip-row">Speed: <b>\${m.speed} tok/s</b> · Latency: <b>\${m.latency}s</b></div>\`;
+    <div class="tip-row">Time / Task: <b>\${m.time || '—'} min</b> · 首 token: <b>\${m.latency || '—'}s</b></div>\`;
 });
 if (HAS_TB) bindTip('chart-tb', 'card-tb', 'tip-tb', (d) => {
   const m = d.el.dataset;

@@ -256,7 +256,7 @@ const AA_OVERRIDE = Object.freeze({
   'MiniMax M3.1 Flash': 'minimaxm31flash',
   'Qwen3.8 Flash': 'qwen38flashnext', // AA 只有 -Flash-Next（改名），与 CC tab 同一条映射
   'Hy3': 'hy3',
-  'Hy4': 'hy4',
+  'Hy4': 'tencenthy4', // AA 写全品牌 `Tencent Hy4`（2026-11 起 AA 榜带品牌前缀）
   'Hy4 preview': 'hy4preview',
   'LongCat-2.0': 'longcat20',
   'Step 5 Preview': 'step5preview',

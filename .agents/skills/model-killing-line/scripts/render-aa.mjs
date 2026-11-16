@@ -34,9 +34,11 @@ const logoInfoOf = (m) => {
 };
 
 // 帕累托前沿（2D：cost 升序 index 创新高，决定连线/大圆）
-// fast 集（3D 差集再在内部按 index×cost 取次级 2D 前沿 → 高效，描蓝圈；speed 缺失按 -Inf；
+// fast 集（3D 差集再在内部按 index×cost 取次级 2D 前沿 → 高效，描蓝圈；
+//   效率维 = AA 榜自带的 Time per Task（分钟，越短越快；2026-11 起 AA 的 Speed 列
+//   默认展示它，tok/s 只作为可切换列存在、SSR 拿不到），故取负号；缺失按 -Inf；
 //   次级线下（被另一个蓝色在 index+cost 上全包围）的降级为真被斩，不标蓝）
-const numSpeed = (r) => { const v = parseFloat(r.speed); return Number.isNaN(v) ? -Infinity : v; };
+const numTime = (r) => (r.time_per_task == null ? -Infinity : -r.time_per_task);
 const byCost = [...rows].sort((a, b) => a.cost - b.cost);
 const frontier = [];
 let best = -Infinity;
@@ -45,8 +47,8 @@ for (const r of byCost) {
 }
 const frontNames = new Set(frontier.map((f) => f.model));
 const fastNames3 = new Set(rows.filter((r) => !frontNames.has(r.model) && !rows.some((o) =>
-  o !== r && o.cost <= r.cost && o.index >= r.index && numSpeed(o) >= numSpeed(r) &&
-  (o.cost < r.cost || o.index > r.index || numSpeed(o) > numSpeed(r))
+  o !== r && o.cost <= r.cost && o.index >= r.index && numTime(o) >= numTime(r) &&
+  (o.cost < r.cost || o.index > r.index || numTime(o) > numTime(r))
 )).map((r) => r.model));
 const fastNames = new Set();
 {
@@ -163,7 +165,7 @@ for (const r of rows) {
   const info = logoInfoOf(r.model);
   const isFast = fastNames.has(r.model);
   const ring = isFast ? '#1971c2' : LOGO_RING;
-  const attrs = `data-model="${esc(r.model)}" data-creator="${esc(r.creator)}" data-index="${r.index}" data-cost="${r.cost}" data-speed="${esc(r.speed)}" data-latency="${esc(r.latency)}"${isFast ? ' data-fast="1"' : ''}${info ? ` data-logo="${info.file}"` : ''}`;
+  const attrs = `data-model="${esc(r.model)}" data-creator="${esc(r.creator)}" data-index="${r.index}" data-cost="${r.cost}" data-time="${r.time_per_task ?? ''}" data-latency="${r.latency ?? ''}"${isFast ? ' data-fast="1"' : ''}${info ? ` data-logo="${info.file}"` : ''}`;
   if (info) {
     const R = 9;
     s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#fff" stroke="${ring}" stroke-width="${isFast ? 2 : 1.2}" ${attrs}/>`;
@@ -190,7 +192,7 @@ for (const f of frontier) {
   const logo = logoOf(f.model);
   const info = logoInfoOf(f.model);
 
-  s += `<g class="frontier-mark" data-model="${esc(f.model)}" data-creator="${esc(f.creator)}" data-index="${f.index}" data-cost="${f.cost}" data-speed="${esc(f.speed)}" data-latency="${esc(f.latency)}"${info ? ` data-logo="${info.file}"` : ''} style="cursor:pointer">`;
+  s += `<g class="frontier-mark" data-model="${esc(f.model)}" data-creator="${esc(f.creator)}" data-index="${f.index}" data-cost="${f.cost}" data-time="${f.time_per_task ?? ''}" data-latency="${f.latency ?? ''}"${info ? ` data-logo="${info.file}"` : ''} style="cursor:pointer">`;
   if (info) {
     s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#fff" stroke="${LOGO_RING}" stroke-width="3"/>`;
     s += `<g clip-path="url(#aa-frontier-clip)" transform="translate(${cx.toFixed(1)},${cy.toFixed(1)})"><image href="${info.uri}" x="-15" y="-15" width="30" height="30" preserveAspectRatio="xMidYMid slice"/></g>`;
@@ -257,7 +259,7 @@ for (const [i, f] of frontier.entries()) {
   const targetY = above ? boxY + boxH : boxY;
   const dotY = above ? cy - R - 1 : cy + R + 1;
   // label 文字可点 → OpenRouter 详情页（归一化 + org 映射，见 openrouter.mjs）
-  const orLink = aaLink(f.model, f.creator).url;
+  const orLink = aaLink(f.base ?? f.model, f.creator).url;
   s += `<line x1="${cx.toFixed(1)}" y1="${dotY.toFixed(1)}" x2="${targetX.toFixed(1)}" y2="${targetY.toFixed(1)}" stroke="#888" stroke-width="0.8"/>`;
   s += `<a href="${orLink}" target="_blank" rel="noopener"><rect x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="11" fill="white" stroke="#d0d0d0"/><text x="${boxX + boxW / 2}" y="${boxY + boxH / 2 + 4}" text-anchor="middle" font-size="11" fill="#333">${esc(fullText)}</text></a>`;
 }

@@ -14,7 +14,9 @@ single-page `index.html` with switchable sections (tab 切换，默认通用智�
 
 - ① 通用智力斩杀线（数据源 Artificial Analysis）: X = Cost per Task USD (log axis),
   Y = Intelligence Index, efficient zone = Index > 35 & cost < $1
-  (表格只收 Index > 20 且 Cost 有效的行).
+  (表格只收 Index > 20 且 Cost 有效的行；2026-11 起 AA 表格只有 7 列，
+  Creator 从模型 logo 的 alt 抓，效率维用榜单自带的 Time per Task（分钟，越短越快），
+  tok/s 已拿不到——详见下面 fetch-aa.mjs 一节).
 - ② 编码能力斩杀线（数据源 Vals AI Vibe Code Bench，tab 文案「编码能力」）:
   X = Cost / Test USD (log axis，跑完一个完整建站任务的成本)，Y = Vibe Code Bench Score (%)，
   efficient zone = Score ≥ 80% & cost ≤ $5。**这张榜取代了原来的 DeepSWE**
@@ -66,7 +68,7 @@ is auto-opened in the system default browser via `open.mjs`.
 
 ```bash
 node .agents/skills/model-killing-line/scripts/fetch-vc.mjs            # → $TMPDIR/model-killing-line/vc-data.json (~121 rows, Vals AI Vibe Code Bench)
-node .agents/skills/model-killing-line/scripts/fetch-aa.mjs           # → $TMPDIR/model-killing-line/aa-data.json (~62 rows, AA)
+node .agents/skills/model-killing-line/scripts/fetch-aa.mjs           # → $TMPDIR/model-killing-line/aa-data.json (~32 rows, AA)
 node .agents/skills/model-killing-line/scripts/fetch-tb.mjs            # → $TMPDIR/model-killing-line/tb-data.json (61 rows, Vals AI Terminal-Bench 4.0) — 可选
 node .agents/skills/model-killing-line/scripts/fetch-openrouter.mjs   # → $TMPDIR/model-killing-line/or-data.json (Top 30 from OpenRouter Top Weekly, text modality) — 可选
 node .agents/skills/model-killing-line/scripts/fetch-plans.mjs         # → $TMPDIR/model-killing-line/plans-data.json (CommandCode Max 10×) — 可选
@@ -122,9 +124,21 @@ see below. The scripts read/write via cwd and need only node stdlib.
     再放宽允许盖背景点，但永不得压其他前沿大圆/已放盒子/标题）。标签按 `labeled:`
     日志核对：未放下的会列出来（圆点仍在，hover 看名字）。
 - `fetch-aa.mjs`: GETs the Artificial Analysis leaderboard SSR HTML and
-  parses the `<tbody>` rows (model, context, creator, index, cost, speed,
-  latency, total). Keeps only Intelligence Index > 20 with non-empty cost.
-  No JSON API exists for the Cost column — SSR HTML is the only source.
+  parses the `<tbody>` rows. **2026-11 站点改版：表格从 9 列变成 7 列**
+  （`Model | Intelligence Index | Cost per Task USD | Time per Task (min) |
+  First Answer Token (s) | Context Window | Further Analysis`）：
+  · Creator 列没了 → 从模型名 cell 里的 lab logo `<img alt="Anthropic">` 抓 creator
+    （比按名字猜准）；
+  · Speed 列默认展示 **Time per Task Minutes**（跑完一个任务要几分钟，越短越快）；
+    tok/s（`outputSpeed`）只作为页面里可切换的列存在，SSR 不渲染 → 拿不到
+    （旧的 `/api/v2/data/*` 已下线，新的 `/api/v2/language/models*` 要 API key）。
+    所以 **AA 的效率维 = Time per Task（分钟，越短越好）**，与 Vals 两张榜的
+    Duration / Test 同口径；`time_per_task` 缺失的行按 -Inf 处理；
+  · 模型名拆成「主名 + effort 变体」（主名在 div、变体在灰色 span：
+    `Claude Fable 5.2` + `Max, Default Fallback`）。输出 `model` = `主名 (变体)`，
+    另存 `base` / `variant`；`normalizeSlug` 剥括号后仍是主名，OR 链接照旧命中。
+  Keeps only Intelligence Index > 20 with cost > 0（log 轴画不了 $0.00 免费档）。
+  No public JSON API — SSR HTML is the only source.
 - `render-aa.mjs`: same structure as `render-vc.mjs` but for AA data
   (log x 基础域 0.01~10、y 基础域 20~55——**数据超界 / 大量空白时坐标轴自适应**：
   x 按 log 刻度阶梯 `[0.01,0.02,0.05,0.1,0.2,0.5,1,2,5,10,15,20,50,100]` 取
@@ -187,7 +201,8 @@ see below. The scripts read/write via cwd and need only node stdlib.
 
 三维语义（能力 × 成本 × 效率）：2D 前沿（绿，🔪高性价比）只看能力+成本；
 效率维三张散点榜各自用自家的时间口径（Vibe Code Bench = **Duration / Test**，
-Vals Terminal-Bench 4.0 = **Duration / Test**，AA = 自带 Tokens/s；
+Vals Terminal-Bench 4.0 = **Duration / Test**，AA = **Time per Task（分钟，2026-11 起
+AA 的 Speed 列默认就是它；tok/s 只存在于可切换列、SSR 拿不到）**；
 CommandCode / OpenCode Go 两张订阅榜无效率维），
 **不再做跟 AA 融合的复合效率**（DeepSWE 的 steps 与旧 TBench 的 run 平均 tok/s 都随换源下线了）。
 叠加效率后仍无人能全包围的，再在内部按能力×成本取一次次级 2D 前沿
@@ -199,7 +214,8 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
 效率看 Duration，token 吞吐对"跑完一个任务要多久"没有解释力）。跨榜重合用 `normalizeSlug` 作归一键直接比
 （不再经过 fuse.mjs）。
 - `openrouter.mjs`: 模型名归一化 + OpenRouter 详情页链接（`normalizeSlug` 去括号
-  effort 后缀 → 小写 hyphen slug；`aaLink(model, creator)` 按 AA 的 Creator 列定 org，
+  effort 后缀 → 小写 hyphen slug；`aaLink(model, creator)` 按 AA 的 creator（2026-11 起从
+模型 logo 的 alt 抓，不再有 Creator 列）定 org，
   `vcLink(model, org)` 按 Vals 详情页路径里的 org 前缀定 org（`VALS_ORG_TO_OR`），
   `tbLink` = `vcLink`（两张 Vals 榜同站同源，都按详情页 `/models/<org>_<slug>` 定 org；
   旧 tbench.ai 榜用的是 Creator 列 + `aaLink`，已随换源下线），`dsLink` 现在被 CommandCode 与
@@ -295,7 +311,7 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
    Index 每日更新，是唯一有"最新信号"的源；Vals 的两张榜（Vibe Code Bench /
    Terminal-Bench 4.0，数周一次重测）虽然现在同频更新，仍是快照，不适合给新代模型定档。
    **📌 太长不看的三个选择（成本优先 / 效率优先 / 能力优先）必须全部取自 AA 榜**
-   （AA 的 Index + Cost per Task + Tokens/s 三个字段就够定档），并在括号里标注
+   （AA 的 Index + Cost per Task + Time per Task 三个字段就够定档），并在括号里标注
    编码榜 / TB 的实测档作为佐证（"编码榜实测 88.9%"），而不是用编码榜 / TB 的数字当
    推荐依据。例如成本优先给 `GPT-6.1 Sol (medium)`（AA 46 分 / $0.36）而不是
    `DeepSeek V4.1 Flash`（编码榜 84.74% / $0.41 的唯一前沿便宜档）——后者在 AA 上只有
@@ -320,9 +336,9 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
    三个名单一致。已踩过的坑：**AA 榜的 2D 前沿与 ⚡ 高效圈交集常常为空**（前沿只看
    能力×成本，⚡ 是 3D 差集），所以"某点在前沿上又套着 ⚡"这种话要先把两个名字
    都在两份名单里查到才能写；查不到就只写其中一个。同理编码榜 / 终端榜的 ⚡ 都是
-   **榜单自带的 Duration / Test 更短**（不是 AA 的 Tokens/s，不是 token 吞吐，也不是
-   「单位成本产出」），拿 AA speed 解释它们的 ⚡ 会错：跑得快 ≠ 输出得多，
-   话痨模型 tok/s 高但更慢。
+   **榜单自带的 Duration / Test 更短**（不是 AA 的 Time per Task，不是 token 吞吐，也不是
+   「单位成本产出」），拿 AA 的时间口径解释它们的 ⚡ 也会错位（两榜的任务集不同）：
+   跑得快 ≠ 输出得多，话痨模型 tok/s 高但更慢。AA 自己的 ⚡ 则按 AA 的 Time per Task 判定。
 
 不允许出现：把 `unbench-succ` 行说成"短板" / "候选但暂不可用"；把"新一代模型
 缺测"说成"不推荐"；用编码榜/TB 的缺测率来评价 AA 上的高 Index 模型；**用编码榜 / TB 的
@@ -469,8 +485,10 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
   只在有折叠时多打一行 `多 harness 折叠（保留最高分 run）: …`（当前 3 个模型）。
   行数或 cost 缺失数的量级变了 = Vals 页面改版（列顺序 / 表格容器），先看文件头
   的列约定再改。`updated` 太久没动说明这个榜也开始停更了，要在解读里说清楚。
-- `fetch-aa.mjs` prints `trs: ~282, kept: ~67`. `kept` drifting means the
-  table markup or filter yield changed — inspect before continuing.
+- `fetch-aa.mjs` prints `trs: ~202, kept: ~32`（2026-11 改版后：7 列表格、Index>20 且
+  cost>0；老模型那一栏多半是 `'--'`，所以 kept 比改版前少了一大截，属正常）。
+  `kept` 骤降/骤升都要先看是不是页面又改版（脚本在列数 ≠ 7 时会直接抛错），
+  再确认过滤条件没变。
 - `fetch-tb.mjs` prints `rows: ~61 (cost 缺失 1 行…)` + `updated: MM/DD/YYYY`
   （Vals Terminal-Bench 4.0）。行数或 cost 缺失数的量级变了 = Vals 页面改版
   （列顺序 / 表格容器）— 重新检查文件头的列约定。
@@ -490,6 +508,7 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
 - Hovering any dot in `index.html` shows a card with that dot's lab logo,
   model name, score, cost and tokens/duration（编码 / 终端两张 Vals 榜都没有 harness、
   agent、effort、tok/s；终端榜的 tooltip 标题写 Terminal-Bench 4.0 Score）。
+  AA 榜的 tooltip 两行硬数据 = Index + Cost/Task 与 Time/Task（分钟）+ 首 token 秒数。
   CommandCode / OpenCode Go 两张订阅榜只有两行硬数据（智力 + 官方次/月 + 次周/次5h），
   没有 tokens/s —— 它们的 X 轴是"能跑多少次"，快慢无从谈起。
 - `logos/` (27 files, ~464KB, designarena `model-logos`, resized to 128px)

@@ -19,7 +19,7 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeSlug, vcLink, aaLink, tbLink } from './openrouter.mjs';
+import { normalizeSlug, vcLink, aaLink, tbLink, AA_CANON_ALIAS } from './openrouter.mjs';
 
 const DIR = process.env.MKL_DIR ?? path.join(os.tmpdir(), 'model-killing-line');
 mkdirSync(DIR, { recursive: true });
@@ -52,7 +52,8 @@ const aaFront = [];
 for (const r of aaByCost) {
   if (r.index > aaBest) { aaBest = r.index; aaFront.push(r); }
 }
-const numSpeed = (r) => { const v = parseFloat(r.speed); return Number.isNaN(v) ? -Infinity : v; };
+// AA 效率维 = 榜单自带的 Time per Task（分钟，越短越快）→ 第三维取负号
+const numSpeed = (r) => (r.time_per_task == null ? -Infinity : -r.time_per_task);
 const aaFast3 = new Set(aaRows.filter((r) => !aaFront.includes(r) && !aaRows.some((o) =>
   o !== r && o.cost <= r.cost && o.index >= r.index && numSpeed(o) >= numSpeed(r) &&
   (o.cost < r.cost || o.index > r.index || numSpeed(o) > numSpeed(r))
@@ -68,6 +69,11 @@ const aaFastNames = new Set();
 // AA 已 highlight 的 model name 集合（高性价比 + 高效），归一化后查 VC 是否缺。
 const aaHighlightedCanon = new Set();
 for (const m of [...aaFrontNames, ...aaFastNames]) aaHighlightedCanon.add(normalizeSlug(m));
+// 同上：AA 榜名带品牌前缀时，把别名也放进 highlight 集合
+for (const [canon, aliases] of Object.entries(AA_CANON_ALIAS)) {
+  if (!aaHighlightedCanon.has(canon)) continue;
+  for (const a of aliases) aaHighlightedCanon.add(a);
+}
 
 // AA highlight 中 VC 完全没出现的 entry—— 这些要在编码表里加一条「待更新」行，
 // 表明"AA 认为这是个不错的模型，但编码榜还没度量过它"。不依赖 OR Top 是否有这个模型（OR 上
@@ -106,6 +112,12 @@ for (const r of aaRows) {
   const k = normalizeSlug(r.model);
   const cur = aaByCanon.get(k);
   if (!cur || r.index > cur.index) aaByCanon.set(k, r);
+}
+// AA 榜名带品牌前缀（`Tencent Hy4`），OR / 编码榜写 `hy4` → 补别名，让两边对得上
+for (const [canon, aliases] of Object.entries(AA_CANON_ALIAS)) {
+  const row = aaByCanon.get(canon);
+  if (!row) continue;
+  for (const a of aliases) if (!aaByCanon.has(a)) aaByCanon.set(a, row);
 }
 // VC 显示名 → 它实际可能的 OR slug 集合（用 vcLink 出来的 finalSlug 作为 alias）。
 const vcSlugAliases = (model, org) => {
@@ -265,7 +277,7 @@ const hlHm = []; // { board: 'vc'|'tb', entry, ... }
 const buildHlEntry = (a, board) => {
   const orMatch = orRows.find((r) => normalizeSlug(r.short_name) === a.canon);
   const aaRow = aaRows.find((r) => normalizeSlug(r.model) === a.canon && (a.fast ? r.model === a.model : true));
-  const link = aaLink(a.model, aaRow?.creator);
+  const link = aaLink(aaRow?.base ?? a.model, aaRow?.creator);
   const providerOrg = (link.url.match(/^https:\/\/openrouter\.ai\/([^/]+)\//) || [])[1] || 'unknown';
   // 锚点：canon 经 strip 启发式找上一代（如 claude-fable-5.1 → claude-fable-5）。
   // 找不到才用 canon 本身（gen-html 会插表底并在 title 注明）。
@@ -283,7 +295,7 @@ const buildHlEntry = (a, board) => {
     context_length: orMatch?.context_length ?? null,
     is_free: orMatch?.is_free ?? false,
     aa_index: aaRow?.index ?? null,
-    aa_speed: aaRow?.speed ?? null,
+    aa_time: aaRow?.time_per_task ?? null,
     predecessor: { board, key: anchor ? anchor.key : a.canon, via: 'aa-highlight-no-or', kind: a.fast ? 'fast' : 'front' },
   };
 };
