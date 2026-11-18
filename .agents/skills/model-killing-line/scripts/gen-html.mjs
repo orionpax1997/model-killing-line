@@ -463,7 +463,7 @@ tbody tr.free[data-url]:hover { background:#d5e8f1; }
     <div id="llm-obs">${OBS}</div>
   </div>
 
-  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.vals.ai/benchmarks/terminal-bench-4' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${HAS_GO ? ' · https://opencode.ai/v2/docs/console/go' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
+  <footer>数据来源 https://artificialanalysis.ai/leaderboards/models · https://www.vals.ai/benchmarks/vibe-code${HAS_TB ? ' · https://www.vals.ai/benchmarks/terminal-bench-4' : ''}${HAS_PLANS ? ' · https://commandcode.ai/docs/plans/max' : ''}${HAS_GO ? ' · https://opencode.ai/console/go' : ''}${WITH_TOP_MISSING ? ' · https://openrouter.ai/models?order=top-weekly' : ''}</footer>
   <div class="gen-date">报告生成日期 ${GEN_DATE} · 榜单数据来自第三方公开来源，仅供学习交流，不构成选型或采购建议</div>
 </div>
 

@@ -1,6 +1,6 @@
 ---
 name: model-killing-line
-description: "Draws the 模型斩杀线 - Pareto-frontier scatters (Vibe Code Bench Score vs Cost/Test + Artificial Analysis Intelligence Index vs Cost per Task + Vals AI Terminal-Bench 4.0 Score vs Cost/Test + CommandCode Max 10× 智力 vs 每月可跑请求数 + OpenCode Go 智力 vs 每月估算请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, Vibe Code / 编码能力 chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, OpenCode Go / OpenCode 套餐 chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://www.vals.ai/benchmarks/vibe-code, https://www.vals.ai/benchmarks/terminal-bench-4, https://artificialanalysis.ai/leaderboards/models, https://commandcode.ai/docs/plans/max and https://opencode.ai/v2/docs/console/go."
+description: "Draws the 模型斩杀线 - Pareto-frontier scatters (Vibe Code Bench Score vs Cost/Test + Artificial Analysis Intelligence Index vs Cost per Task + Vals AI Terminal-Bench 4.0 Score vs Cost/Test + CommandCode Max 10× 智力 vs 每月可跑请求数 + OpenCode Go 智力 vs 每月估算请求数) as a single-page HTML with hover tooltips, efficient-zone shades, separate charts/tables per source, and one joint 解读. Use when the user asks for a 斩杀线, Vibe Code / 编码能力 chart, AA chart, TBench/Terminal-Bench chart, CommandCode chart, OpenCode Go / OpenCode 套餐 chart, or Pareto frontier of coding models. Takes no arguments - data always comes from https://www.vals.ai/benchmarks/vibe-code, https://www.vals.ai/benchmarks/terminal-bench-4, https://artificialanalysis.ai/leaderboards/models, https://commandcode.ai/docs/plans/max and https://opencode.ai/console/go."
 ---
 
 # model-killing-line
@@ -178,19 +178,18 @@ see below. The scripts read/write via cwd and need only node stdlib.
 - `render-plans.mjs`: 结构同前三个，但**前沿大圆不做 de-clutter**（见下），
   `data-tier` / `data-contributor` / `data-peakwin` 属性，peak 孪生点用虚线环 +
   从 off-peak 拉细连线，Contributor 用橙色虚线大圈 + 两行标注。
-- `fetch-go.mjs`: GETs `https://opencode.ai/v2/docs/console/go`（Astro SSR，页面把三个套餐
-  Go / Go Plus / Go Teams 的表格**全渲染进 DOM**，每类表各出现 3 次、顺序固定 = Go 在最前）。
-  抽三类表：价格表（Model | Input | Output | Cached Read | Cached Write | Monthly limit）、
-  估算请求表（Model | Requests per 5 hours / week / month）、隐私表（Model | Model training |
-  Data retention），并抓页尾那段"逐模型每请求 token 画像"。**只取第一张价格表 + 第一张估算请求表
-  （= Go $10/月）**，用两个自检堵住"静默拿错套餐"：套餐表里 Go 的价格必须是 $10；Go 那张价格表的
-  月额度中位数必须小于另外两张（否则说明 tab 顺序变了）。价格表模型名折叠规则：`(≤ X tokens)` /
-  `(> X tokens)` 上下文档位只留低价档；`(Off-Peak)` / `(Peak)` 拆成两个孪生行（peak 的请求数按
-  `peak_in ÷ off_in` 倍率缩放）；`(50% off)` 促销行取**折后价**（单元格里 `$4.00 $2.00` 取最后一个数，
-  所以数字解析一律 `last(numbersIn(cell))`）。`Unlimited` 的请求数存 `null` + `free: true`
+- `fetch-go.mjs`: GETs `https://opencode.ai/console/go`（Console 页，唯一剩下的表格
+  Model | Relative request allowances | Est. requests / 5 hr | Monthly limit，每行同时给
+  Go / Go Plus 两档，只取 `data-plan="go"`）+ 官方 models API
+  `https://opencode.ai/inference/go/v1/models`（per-1M 单价 / 月额度 / peak 倍率 / 隐私，
+  id 与 Console 页 `data-model` slug 一一对应作 join 键）。旧文档页的三个套餐表 + token 画像
+  段落已下线（2026-11 改版）。**X = 官方 Est. requests / 5 hr × 5 = 每月请求数**：新页只给 5h，
+  周 = 2.5×5h、月 = 5×5h（旧官方估算表的恒等式，逐模型精确成立），`requests_source` 标
+  `official-5h-derived`。自检三条：JSON-LD 里 Go 价格必须是 $10；Console 页与 API 的模型集合
+  必须一致；Go 数值必须小于 Go Plus。`Unlimited` 的请求数存 `null` + `free: true`
   （log 轴画不了无限）。Y 轴智力**只用 AA**（见下节），AA 无分的行标 `index_pending`、不上图。
-  自算 `monthly_limit ÷ (官方 token 画像 × 官方单价)` 作为 `est_requests_month` 只做 QA：
-  抓对表时 `est_vs_official` 中位数应在 95%~105%（实测 100.0%）。
+  peak 孪生：仅 `multipliers.when.any`（每日时段窗口，如 DeepSeek 两款 factor=2）才拆；
+  `when.date.gte` 型（如 Gemini 4 Argon "2026-12-01 起全天 2×"）只记 notes 不拆行。
 - `render-go.mjs`: 与 `render-plans.mjs` 同构（右上高性价比区、按 requests 降序扫 index
   record-high 的右上包络、`MIN_STEP=0.5`、固定 R=15 不做 de-clutter、碰撞感知 callout），
   三处不同：① X 轴用 `X_LADDER` 阶梯自适应（数据 ~735~217k 次/月 → 轴域 500~500k；沿用
@@ -422,9 +421,10 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
   读者只会看到"同名点散成三处"。单档也才谈得上"月费固定 → X 轴纯比能跑多少次"。
   选 Go 而不是 Plus/Teams：它是文档页的标题档、最便宜、且**每美元额度最高**
   （Plus = 3× 请求 / 4× 月费；Teams ≈ 1.08× 请求 / 2× 月费）。
-- **X 轴 = 官方 `Requests per month` 的估算值**，原样引用，不二次推算。页面自己写明这是按
-  "典型 Go 用法"的 token 画像估的（画像逐模型列在页尾，抓进 `tokens_per_request`）。
-  自算值（月额度 ÷ 每请求成本）只留 `est_requests_month` / `est_vs_official` 做 QA。
+- **X 轴 = 官方 `Est. requests / 5 hr` × 5（每月请求数）**。Console 页只印 5h 值，
+  月 = 5×5h、周 = 2.5×5h（旧官方估算表的恒等式，逐模型精确成立）——解读里不要把周/月
+  换算值说成"官网直接印的数"。单价与月额度取官方 models API。
+  token 画像段落已下线，不再有自算 QA。
 - **Y 轴 = AA Intelligence Index，单源**。OpenCode 自己不发布分数。另一条候选是 CommandCode
   的 Intelligence 列，但 2026-11 实测两家**已经不是同一把尺子**：Claude / GPT / Gemini 差 1~4 分，
   国产开放权重模型系统性差 +10~16 分（GLM-5.3 44.8 vs AA 32、MiMo V2.6 Pro 46.3 vs 30、
@@ -436,11 +436,12 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
   100K 次/月以上只有 3 个点，27 分就是这一簇里最低的那个）。
 
 ### 折叠 / 过滤（按顺序）
-1. **上下文档位折叠**：价格表把同一模型按 `(≤ 512K tokens)` / `(> 512K tokens)` 拆行，
-   只留低价档（`≤`）那一行——估算请求数本来就是按低价档的 token 画像算的。
-2. **peak / off-peak 孪生拆分**：DeepSeek V4.1 Flash / V4 Pro 在官方表里是两行真价，
-   拆成 `(off-peak)` / `(peak)` 两个点，peak 的请求数按 `peak_in ÷ off_in` 倍率缩放
-   （倍率精确；用成本重算会带进 token 画像误差）。支配判定与同请求数去重必须**按 tier 隔离**。
+1. ~~上下文档位折叠~~（旧文档页已下线）：现在一行一个模型，无需折叠。
+2. **peak / off-peak 孪生拆分**：仅 API `multipliers.when.any`（每日时段窗口）才拆——
+   DeepSeek V4.1 Flash / V4 Pro（factor=2，01–04 & 06–10 UTC，周一至周五）拆成
+   `(off-peak)` / `(peak)` 两个点，peak 的请求数按 factor 倍率缩放（倍率精确；
+   用成本重算会带进误差）。`when.date.gte` 型（Gemini 4 Argon 2026-12-01 起全天 2×）
+   只记 notes 不拆行。支配判定与同请求数去重必须**按 tier 隔离**。
 3. **族内弱支配过滤**（`superseded`）：同族里新一代 `index >=` 且 `requests >=` 上一代、
    至少一项严格更高，就删旧代。**不能"每族只留最高版本"**——会误删真实的取舍档位。
    OpenCode 上典型：DeepSeek V4 Pro 被 V4.1 Flash 支配（同族、两轴都不差）。
@@ -494,11 +495,9 @@ CommandCode / OpenCode Go 两张订阅榜无效率维），
   （列顺序 / 表格容器）— 重新检查文件头的列约定。
 - `render-tb.mjs` prints frontier points + `labeled:` + `efficient:`；前沿数按 model 计
   一行一个模型，`efficient:` 里的名字必须能在 TB 表格里找到对应行（三态一致）。
-- `fetch-go.mjs` prints `价格表折叠: 39 行 → ~31 个模型`（上下文档位折叠 + peak 拆孪生）、
-  `估算请求表: 31 行`、`月额度中位数 <…>`（Go < Teams < Plus 顺序自检通过）、
-  `自算 vs 官方估算（中位数）: 100.0% ✓ 抓对了表`、`智力（AA 单源）: 有分 ~14 / 待更新 ~17`。
-  任何一条量级变了 = OpenCode 文档页改版（tab 顺序、表头列名、token 画像段落），
-  先看脚本头注释里的表格约定。自检那一行若不在 95%~105%，说明抓到了 Go Plus 的额度。
+- `fetch-go.mjs` prints `Console 页: 32 个模型`、`models API: 32 个模型`、
+  `智力（AA 单源）: 有分 ~16 / 待更新 ~16`、`peak 孪生: 2 个`。
+  任何一条量级变了 = OpenCode Console 页或 models API 改版，先看脚本头注释里的数据源约定。
 - `render-go.mjs` prints x/y domain + 高性价比区个数 + pareto 名单 + `labeled:` + 待更新/免费名单；
   pareto 名单必须与 `gen-html.mjs` 打印的 `go frontier:` 一致（两边同一个 `MIN_STEP=0.5`），
   `labeled:` 里的「未放下 …」说明气泡位不够（圆点仍在，hover 可看名字）。
